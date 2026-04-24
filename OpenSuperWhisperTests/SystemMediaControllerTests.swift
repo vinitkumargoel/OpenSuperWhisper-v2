@@ -4,7 +4,7 @@ import XCTest
 
 final class SystemMediaControllerTests: XCTestCase {
     func testRecordingLifecycleCapturesMutesAndRestoresVolume() {
-        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, volumes: [0: 0.7], mutes: [0: 0])
         let backend = MockSystemVolumeBackend(snapshot: snapshot)
         let controller = SystemMediaController(backend: backend)
 
@@ -29,7 +29,7 @@ final class SystemMediaControllerTests: XCTestCase {
     }
 
     func testStopWithoutStartDoesNotRestore() {
-        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, volumes: [0: 0.7], mutes: [0: 0])
         let backend = MockSystemVolumeBackend(snapshot: snapshot)
         let controller = SystemMediaController(backend: backend)
 
@@ -41,8 +41,8 @@ final class SystemMediaControllerTests: XCTestCase {
     }
 
     func testRepeatedStartRestoresOnlyLatestCapturedVolume() {
-        let first = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
-        let second = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.4])
+        let first = OutputVolumeSnapshot(deviceID: 42, volumes: [0: 0.7], mutes: [0: 0])
+        let second = OutputVolumeSnapshot(deviceID: 42, volumes: [0: 0.4], mutes: [0: 0])
         let backend = MockSystemVolumeBackend(snapshots: [first, second])
         let controller = SystemMediaController(backend: backend)
 
@@ -55,7 +55,7 @@ final class SystemMediaControllerTests: XCTestCase {
     }
 
     func testDisabledPreferenceDoesNotChangeVolume() {
-        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, volumes: [0: 0.7], mutes: [0: 0])
         let backend = MockSystemVolumeBackend(snapshot: snapshot)
         let controller = SystemMediaController(backend: backend)
 
@@ -88,10 +88,8 @@ private final class MockSystemVolumeBackend: SystemVolumeBackend {
         return snapshots.removeFirst()
     }
 
-    func setOutputVolume(_ volume: Float32, for snapshot: OutputVolumeSnapshot) {
-        if volume == 0 {
-            mutedSnapshots.append(snapshot)
-        }
+    func muteOutput(for snapshot: OutputVolumeSnapshot) {
+        mutedSnapshots.append(snapshot)
     }
 
     func restoreOutputVolume(_ snapshot: OutputVolumeSnapshot) {

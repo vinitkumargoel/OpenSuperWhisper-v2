@@ -3,12 +3,13 @@ import Foundation
 
 struct OutputVolumeSnapshot: Equatable {
     let deviceID: AudioDeviceID
-    let channels: [UInt32: Float32]
+    let volumes: [UInt32: Float32]
+    let mutes: [UInt32: UInt32]
 }
 
 protocol SystemVolumeBackend {
     func currentOutputVolume() -> OutputVolumeSnapshot?
-    func setOutputVolume(_ volume: Float32, for snapshot: OutputVolumeSnapshot)
+    func muteOutput(for snapshot: OutputVolumeSnapshot)
     func restoreOutputVolume(_ snapshot: OutputVolumeSnapshot)
 }
 
@@ -42,7 +43,7 @@ final class SystemMediaController {
         lock.unlock()
 
         if shouldMute {
-            backend.setOutputVolume(0, for: snapshot)
+            backend.muteOutput(for: snapshot)
         }
     }
 
@@ -69,26 +70,36 @@ final class CoreAudioVolumeBackend: SystemVolumeBackend {
     func currentOutputVolume() -> OutputVolumeSnapshot? {
         guard let deviceID = defaultOutputDeviceID() else { return nil }
 
-        var channels: [UInt32: Float32] = [:]
+        var volumes: [UInt32: Float32] = [:]
+        var mutes: [UInt32: UInt32] = [:]
         for channel in fallbackChannels {
             if let volume = outputVolume(deviceID: deviceID, channel: channel) {
-                channels[channel] = volume
+                volumes[channel] = volume
+            }
+            if let mute = outputMute(deviceID: deviceID, channel: channel) {
+                mutes[channel] = mute
             }
         }
 
-        guard !channels.isEmpty else { return nil }
-        return OutputVolumeSnapshot(deviceID: deviceID, channels: channels)
+        guard !volumes.isEmpty || !mutes.isEmpty else { return nil }
+        return OutputVolumeSnapshot(deviceID: deviceID, volumes: volumes, mutes: mutes)
     }
 
-    func setOutputVolume(_ volume: Float32, for snapshot: OutputVolumeSnapshot) {
-        for channel in snapshot.channels.keys {
-            setOutputVolume(deviceID: snapshot.deviceID, channel: channel, volume: volume)
+    func muteOutput(for snapshot: OutputVolumeSnapshot) {
+        for channel in snapshot.mutes.keys {
+            setOutputMute(deviceID: snapshot.deviceID, channel: channel, muted: 1)
+        }
+        for channel in snapshot.volumes.keys {
+            setOutputVolume(deviceID: snapshot.deviceID, channel: channel, volume: 0)
         }
     }
 
     func restoreOutputVolume(_ snapshot: OutputVolumeSnapshot) {
-        for (channel, volume) in snapshot.channels {
+        for (channel, volume) in snapshot.volumes {
             setOutputVolume(deviceID: snapshot.deviceID, channel: channel, volume: volume)
+        }
+        for (channel, muted) in snapshot.mutes {
+            setOutputMute(deviceID: snapshot.deviceID, channel: channel, muted: muted)
         }
     }
 
@@ -134,6 +145,26 @@ final class CoreAudioVolumeBackend: SystemVolumeBackend {
         return volume
     }
 
+    private func outputMute(deviceID: AudioDeviceID, channel: UInt32) -> UInt32? {
+        var muted = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = muteAddress(channel: channel)
+
+        guard AudioObjectHasProperty(deviceID, &address) else { return nil }
+
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &muted
+        )
+
+        guard status == noErr else { return nil }
+        return muted
+    }
+
     private func setOutputVolume(deviceID: AudioDeviceID, channel: UInt32, volume: Float32) {
         var address = volumeAddress(channel: channel)
         var isSettable = DarwinBoolean(false)
@@ -156,9 +187,39 @@ final class CoreAudioVolumeBackend: SystemVolumeBackend {
         )
     }
 
+    private func setOutputMute(deviceID: AudioDeviceID, channel: UInt32, muted: UInt32) {
+        var address = muteAddress(channel: channel)
+        var isSettable = DarwinBoolean(false)
+        guard AudioObjectHasProperty(deviceID, &address),
+              AudioObjectIsPropertySettable(deviceID, &address, &isSettable) == noErr,
+              isSettable.boolValue else {
+            return
+        }
+
+        var muteValue = muted
+        let size = UInt32(MemoryLayout<UInt32>.size)
+
+        AudioObjectSetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            size,
+            &muteValue
+        )
+    }
+
     private func volumeAddress(channel: UInt32) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: channel
+        )
+    }
+
+    private func muteAddress(channel: UInt32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: channel
         )

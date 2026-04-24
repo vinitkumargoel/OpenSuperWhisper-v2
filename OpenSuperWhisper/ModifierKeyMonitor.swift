@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import Foundation
 
@@ -116,6 +117,13 @@ class ModifierKeyMonitor {
         
         selectedModifierKey = modifierKey
         isModifierPressed = false
+
+        if !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            AXIsProcessTrustedWithOptions(options)
+            print("ModifierKeyMonitor: Accessibility permission is required for modifier-only hotkeys.")
+            return
+        }
         
         let eventMask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
         
