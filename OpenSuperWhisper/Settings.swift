@@ -116,6 +116,12 @@ class SettingsViewModel: ObservableObject {
             AppPreferences.shared.playSoundOnRecordStart = playSoundOnRecordStart
         }
     }
+
+    @Published var pauseMediaDuringRecording: Bool {
+        didSet {
+            AppPreferences.shared.pauseMediaDuringRecording = pauseMediaDuringRecording
+        }
+    }
     
     @Published var useAsianAutocorrect: Bool {
         didSet {
@@ -184,6 +190,7 @@ class SettingsViewModel: ObservableObject {
         self.beamSize = prefs.beamSize
         self.debugMode = prefs.debugMode
         self.playSoundOnRecordStart = prefs.playSoundOnRecordStart
+        self.pauseMediaDuringRecording = prefs.pauseMediaDuringRecording
         self.useAsianAutocorrect = prefs.useAsianAutocorrect
         self.modifierOnlyHotkey = ModifierKey(rawValue: prefs.modifierOnlyHotkey) ?? .none
         self.holdToRecord = prefs.holdToRecord
@@ -1564,6 +1571,16 @@ struct SettingsView: View {
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                                 .help("Play a notification sound when recording begins")
+                        }
+
+                        HStack {
+                            Text("Pause media while recording")
+                                .font(.subheadline)
+                            Spacer()
+                            Toggle("", isOn: $viewModel.pauseMediaDuringRecording)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                                .help("Pause active media when recording starts and resume it when recording stops")
                         }
                     }
                 }

@@ -20,6 +20,7 @@ class AudioRecorder: NSObject, ObservableObject {
     private var microphoneChangeObserver: Any?
     private var connectionCheckTimer: DispatchSourceTimer?
     private var recordingDeviceID: AudioDeviceID?
+    private let mediaController: SystemMediaController
 
     // MARK: - Singleton Instance
 
@@ -28,6 +29,7 @@ class AudioRecorder: NSObject, ObservableObject {
     override private init() {
         let tempDir = FileManager.default.temporaryDirectory
         temporaryDirectory = tempDir.appendingPathComponent("temp_recordings")
+        mediaController = .shared
         
         super.init()
         createTemporaryDirectoryIfNeeded()
@@ -114,6 +116,8 @@ class AudioRecorder: NSObject, ObservableObject {
             print("stop recording while recording")
             _ = stopRecording()
         }
+
+        mediaController.recordingDidStart(enabled: AppPreferences.shared.pauseMediaDuringRecording)
         
         if AppPreferences.shared.playSoundOnRecordStart {
             playNotificationSound()
@@ -171,12 +175,14 @@ class AudioRecorder: NSObject, ObservableObject {
         } catch {
             print("Failed to start recording: \(error)")
             currentRecordingURL = nil
+            mediaController.recordingDidStop()
             updateRecordingState(isRecording: false, isConnecting: false)
         }
     }
     
     func stopRecording() -> URL? {
         audioRecorder?.stop()
+        mediaController.recordingDidStop()
         updateRecordingState(isRecording: false, isConnecting: false)
         stopConnectionMonitoring()
         
@@ -196,6 +202,7 @@ class AudioRecorder: NSObject, ObservableObject {
     
     func cancelRecording() {
         audioRecorder?.stop()
+        mediaController.recordingDidStop()
         updateRecordingState(isRecording: false, isConnecting: false)
         stopConnectionMonitoring()
         
