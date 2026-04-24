@@ -76,7 +76,7 @@ class ShortcutManager {
         
         if modifierKey != .none {
             useModifierOnlyHotkey = true
-            KeyboardShortcuts.disable(.toggleRecord)
+            KeyboardShortcuts.enable(.toggleRecord)
             
             ModifierKeyMonitor.shared.onKeyDown = { [weak self] in
                 self?.handleKeyDown()
@@ -87,7 +87,7 @@ class ShortcutManager {
             }
             
             ModifierKeyMonitor.shared.start(modifierKey: modifierKey)
-            print("ShortcutManager: Using modifier-only hotkey: \(modifierKey.displayName)")
+            print("ShortcutManager: Using modifier-only hotkey: \(modifierKey.displayName) with regular shortcut fallback")
         } else {
             useModifierOnlyHotkey = false
             ModifierKeyMonitor.shared.stop()
