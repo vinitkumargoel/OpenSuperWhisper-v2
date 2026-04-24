@@ -39,7 +39,7 @@ class ContentViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] isConnecting in
                 guard let self = self else { return }
-                if isConnecting && self.state != .decoding {
+                if isConnecting && self.state != .decoding && self.state != .formatting {
                     self.state = .connecting
                     self.stopBlinking()
                     self.stopDurationTimer()
@@ -52,7 +52,7 @@ class ContentViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] isRecording in
                 guard let self = self else { return }
-                if isRecording && self.state != .decoding {
+                if isRecording && self.state != .decoding && self.state != .formatting {
                     self.state = .recording
                     self.startBlinking()
                     self.startDurationTimerIfNeeded()
@@ -188,7 +188,12 @@ class ContentViewModel: ObservableObject {
 
                 do {
                     print("start decoding...")
-                    let text = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    let text = await FinalTextProcessor.formatIfNeeded(rawText) {
+                        await MainActor.run {
+                            self.state = .formatting
+                        }
+                    }
 
                     // Capture the current recording duration
                     let duration = await MainActor.run { self.recordingDuration }
@@ -202,6 +207,7 @@ class ContentViewModel: ObservableObject {
                         timestamp: timestamp,
                         fileName: fileName,
                         transcription: text,
+                        rawTranscription: rawText,
                         duration: duration,
                         status: .completed,
                         progress: 1.0,
@@ -218,6 +224,7 @@ class ContentViewModel: ObservableObject {
                             timestamp: timestamp,
                             fileName: fileName,
                             transcription: text,
+                            rawTranscription: rawText,
                             duration: self.recordingDuration,
                             status: .completed,
                             progress: 1.0,
@@ -498,7 +505,7 @@ struct ContentView: View {
                                 viewModel.startRecording()
                             }
                         }) {
-                            if viewModel.state == .decoding || viewModel.state == .connecting {
+                            if viewModel.state == .decoding || viewModel.state == .formatting || viewModel.state == .connecting {
                                 ProgressView()
                                     .scaleEffect(1.0)
                                     .frame(width: 48, height: 48)
@@ -508,7 +515,7 @@ struct ContentView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .disabled(viewModel.transcriptionService.isLoading || viewModel.transcriptionService.isTranscribing || viewModel.transcriptionQueue.isProcessing || viewModel.state == .decoding)
+                        .disabled(viewModel.transcriptionService.isLoading || viewModel.transcriptionService.isTranscribing || viewModel.transcriptionQueue.isProcessing || viewModel.state == .decoding || viewModel.state == .formatting)
                         .padding(.top, 24)
                         .padding(.bottom, 16)
                         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewModel.isRecording)
@@ -735,6 +742,7 @@ struct RecordingRow: View {
     let onRegenerate: () -> Void
     @StateObject private var audioRecorder = AudioRecorder.shared
     @State private var showTranscription = false
+    @State private var showRawTranscription = false
     @State private var isHovered = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -743,7 +751,7 @@ struct RecordingRow: View {
     }
     
     private var isPending: Bool {
-        recording.status == .pending || recording.status == .converting || recording.status == .transcribing
+        recording.status == .pending || recording.status == .converting || recording.status == .transcribing || recording.status == .formatting
     }
     
     private var isRegenerating: Bool {
@@ -758,6 +766,8 @@ struct RecordingRow: View {
             return "Converting..."
         case .transcribing:
             return "Transcribing..."
+        case .formatting:
+            return "Formatting..."
         case .completed:
             return ""
         case .failed:
@@ -765,11 +775,26 @@ struct RecordingRow: View {
         }
     }
     
-    private var displayText: String {
-        if recording.transcription.isEmpty || recording.transcription == "Starting transcription..." || recording.transcription == "In queue..." {
-            return ""
+    private var hasRawTranscription: Bool {
+        guard let raw = recording.rawTranscription?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return false
+        }
+        return raw != recording.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedTranscriptionText: String {
+        if showRawTranscription, hasRawTranscription, let raw = recording.rawTranscription {
+            return raw
         }
         return recording.transcription
+    }
+
+    private var displayText: String {
+        let text = selectedTranscriptionText
+        if text.isEmpty || text == "Starting transcription..." || text == "In queue..." {
+            return ""
+        }
+        return text
     }
 
     var body: some View {
@@ -844,6 +869,21 @@ struct RecordingRow: View {
                 .padding(.horizontal, 12)
                 .padding(.top, isPending && !isRegenerating ? 4 : 8)
             } else if !displayText.isEmpty {
+                if hasRawTranscription {
+                    HStack(spacing: 6) {
+                        Picker("", selection: $showRawTranscription) {
+                            Text("Formatted").tag(false)
+                            Text("Raw").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 170)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                }
+
                 ZStack(alignment: .topLeading) {
                     TranscriptionView(
                         transcribedText: displayText,
@@ -945,7 +985,7 @@ struct RecordingRow: View {
                         Button(action: {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(
-                                recording.transcription, forType: .string
+                                selectedTranscriptionText, forType: .string
                             )
                         }) {
                             Image(systemName: "doc.on.doc.fill")

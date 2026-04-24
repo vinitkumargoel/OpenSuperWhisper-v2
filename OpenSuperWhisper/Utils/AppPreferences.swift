@@ -23,6 +23,10 @@ struct OptionalUserDefault<T> {
 
 final class AppPreferences {
     static let shared = AppPreferences()
+    static let defaultCodexFormattingPrompt = """
+    Rewrite the transcript into clean, grammatically correct, well-formatted text. Remove filler words, repeated false starts, transcription artifacts, timestamps, bracketed annotations, speaker labels, and non-content notes. Preserve the speaker's meaning, names, numbers, language, and intent. Do not summarize, answer questions, add new ideas, or wrap the output in quotes or Markdown. Return only the final cleaned text.
+    """
+
     private init() {
         migrateOldPreferences()
     }
@@ -110,4 +114,16 @@ final class AppPreferences {
     
     @UserDefault(key: "addSpaceAfterSentence", defaultValue: true)
     var addSpaceAfterSentence: Bool
+
+    @UserDefault(key: "codexFormattingEnabled", defaultValue: false)
+    var codexFormattingEnabled: Bool
+
+    @UserDefault(key: "codexExecutablePath", defaultValue: "codex")
+    var codexExecutablePath: String
+
+    @UserDefault(key: "codexModel", defaultValue: "gpt-5.2")
+    var codexModel: String
+
+    @UserDefault(key: "codexFormattingPrompt", defaultValue: AppPreferences.defaultCodexFormattingPrompt)
+    var codexFormattingPrompt: String
 }

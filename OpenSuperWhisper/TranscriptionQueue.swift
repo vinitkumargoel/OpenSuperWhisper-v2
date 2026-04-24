@@ -113,6 +113,7 @@ class TranscriptionQueue: ObservableObject {
                 timestamp: timestamp,
                 fileName: fileName,
                 transcription: "",
+                rawTranscription: nil,
                 duration: durationInSeconds,
                 status: .pending,
                 progress: 0.0,
@@ -236,7 +237,14 @@ class TranscriptionQueue: ObservableObject {
                 }
 
                 let settings = Settings()
-                let text = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings)
+                let rawText = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings)
+                let text = await FinalTextProcessor.formatIfNeeded(rawText) {
+                    await self.recordingStore.updateRecordingStatusOnly(
+                        recording.id,
+                        progress: 0.95,
+                        status: .formatting
+                    )
+                }
 
                 if isRecordingCancelled(recording.id) || Task.isCancelled {
                     return
@@ -262,6 +270,7 @@ class TranscriptionQueue: ObservableObject {
                     transcription: text,
                     progress: 1.0,
                     status: .completed,
+                    rawTranscription: rawText,
                     isRegeneration: false
                 )
 

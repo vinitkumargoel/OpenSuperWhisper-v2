@@ -1,10 +1,12 @@
 import Foundation
 import GRDB
+import AVFoundation
 
 enum RecordingStatus: String, Codable {
     case pending
     case converting
     case transcribing
+    case formatting
     case completed
     case failed
 }
@@ -14,6 +16,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
     let timestamp: Date
     let fileName: String
     var transcription: String
+    var rawTranscription: String?
     let duration: TimeInterval
     var status: RecordingStatus
     var progress: Float
@@ -22,7 +25,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
     var isRegeneration: Bool = false
     
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, fileName, transcription, duration, status, progress, sourceFileURL
+        case id, timestamp, fileName, transcription, rawTranscription, duration, status, progress, sourceFileURL
     }
 
     static func == (lhs: Recording, rhs: Recording) -> Bool {
@@ -30,6 +33,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
                lhs.status == rhs.status &&
                lhs.progress == rhs.progress &&
                lhs.transcription == rhs.transcription &&
+               lhs.rawTranscription == rhs.rawTranscription &&
                lhs.isRegeneration == rhs.isRegeneration
     }
 
@@ -46,7 +50,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
     }
     
     var isPending: Bool {
-        status == .pending || status == .converting || status == .transcribing
+        status == .pending || status == .converting || status == .transcribing || status == .formatting
     }
     
     var sourceFileName: String? {
@@ -61,6 +65,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
         static let timestamp = Column(CodingKeys.timestamp)
         static let fileName = Column(CodingKeys.fileName)
         static let transcription = Column(CodingKeys.transcription)
+        static let rawTranscription = Column(CodingKeys.rawTranscription)
         static let duration = Column(CodingKeys.duration)
         static let status = Column(CodingKeys.status)
         static let progress = Column(CodingKeys.progress)
@@ -89,6 +94,9 @@ class RecordingStore: ObservableObject {
                 at: appDirectory, withIntermediateDirectories: true)
             dbQueue = try DatabaseQueue(path: dbPath.path)
             try setupDatabase()
+            Task {
+                await repairStoredZeroDurations()
+            }
         } catch {
             fatalError("Failed to setup database: \(error)")
         }
@@ -127,6 +135,17 @@ class RecordingStore: ObservableObject {
                 }
             }
         }
+
+        migrator.registerMigration("v3_add_raw_transcription") { db in
+            let columns = try db.columns(in: Recording.databaseTableName)
+            let columnNames = columns.map { $0.name }
+
+            if !columnNames.contains("rawTranscription") {
+                try db.alter(table: Recording.databaseTableName) { t in
+                    t.add(column: "rawTranscription", .text)
+                }
+            }
+        }
         
         try migrator.migrate(dbQueue)
     }
@@ -148,11 +167,107 @@ class RecordingStore: ObservableObject {
         }
     }
 
+    nonisolated func fetchAnalyticsRecordings() async throws -> [Recording] {
+        let recordings = try await dbQueue.read { db in
+            try Recording
+                .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
+                .order(Recording.Columns.timestamp.desc)
+                .fetchAll(db)
+        }
+        return await repairDurationsForAnalytics(recordings)
+    }
+
+    private nonisolated func repairDurationsForAnalytics(_ recordings: [Recording]) async -> [Recording] {
+        await withTaskGroup(of: Recording.self) { group in
+            for recording in recordings {
+                group.addTask {
+                    guard recording.duration <= 0 else { return recording }
+                    let asset = AVURLAsset(url: recording.url)
+                    let loadedDuration = (try? await asset.load(.duration))
+                        .map { CMTimeGetSeconds($0) } ?? 0
+                    let duration = loadedDuration.isFinite && loadedDuration > 0 ? loadedDuration : 0
+
+                    guard duration > 0 else { return recording }
+                    return Recording(
+                        id: recording.id,
+                        timestamp: recording.timestamp,
+                        fileName: recording.fileName,
+                        transcription: recording.transcription,
+                        rawTranscription: recording.rawTranscription,
+                        duration: duration,
+                        status: recording.status,
+                        progress: recording.progress,
+                        sourceFileURL: recording.sourceFileURL
+                    )
+                }
+            }
+
+            var repaired: [Recording] = []
+            for await recording in group {
+                repaired.append(recording)
+            }
+            return repaired.sorted { $0.timestamp > $1.timestamp }
+        }
+    }
+
+    private func repairStoredZeroDurations() async {
+        do {
+            let repairedCount = try await repairStoredZeroDurationsInDB()
+            if repairedCount > 0 {
+                await MainActor.run {
+                    NotificationCenter.default.post(name: Self.recordingsDidUpdateNotification, object: nil)
+                }
+            }
+        } catch {
+            print("Failed to repair recording durations: \(error)")
+        }
+    }
+
+    private nonisolated func repairStoredZeroDurationsInDB() async throws -> Int {
+        let zeroDurationRecordings = try await dbQueue.read { db in
+            try Recording
+                .filter(Recording.Columns.duration <= 0)
+                .fetchAll(db)
+        }
+
+        let repairs = await withTaskGroup(of: (UUID, TimeInterval)?.self) { group in
+            for recording in zeroDurationRecordings {
+                group.addTask {
+                    let asset = AVURLAsset(url: recording.url)
+                    let loadedDuration = (try? await asset.load(.duration))
+                        .map { CMTimeGetSeconds($0) } ?? 0
+                    let duration = loadedDuration.isFinite && loadedDuration > 0 ? loadedDuration : 0
+                    return duration > 0 ? (recording.id, duration) : nil
+                }
+            }
+
+            var repaired: [(UUID, TimeInterval)] = []
+            for await repair in group {
+                if let repair {
+                    repaired.append(repair)
+                }
+            }
+            return repaired
+        }
+
+        guard !repairs.isEmpty else { return 0 }
+
+        try await dbQueue.write { db in
+            for (id, duration) in repairs {
+                try Recording
+                    .filter(Recording.Columns.id == id)
+                    .updateAll(db, [Recording.Columns.duration.set(to: duration)])
+            }
+        }
+
+        return repairs.count
+    }
+
     func getPendingRecordings() -> [Recording] {
         do {
             return try dbQueue.read { db in
                 try Recording
-                    .filter([RecordingStatus.pending.rawValue, RecordingStatus.converting.rawValue, RecordingStatus.transcribing.rawValue].contains(Recording.Columns.status))
+                    .filter([RecordingStatus.pending.rawValue, RecordingStatus.converting.rawValue, RecordingStatus.transcribing.rawValue, RecordingStatus.formatting.rawValue].contains(Recording.Columns.status))
                     .order(Recording.Columns.timestamp.asc)
                     .fetchAll(db)
             }
@@ -166,7 +281,7 @@ class RecordingStore: ObservableObject {
         do {
             return try dbQueue.read { db in
                 try Recording
-                    .filter([RecordingStatus.pending.rawValue, RecordingStatus.converting.rawValue, RecordingStatus.transcribing.rawValue].contains(Recording.Columns.status))
+                    .filter([RecordingStatus.pending.rawValue, RecordingStatus.converting.rawValue, RecordingStatus.transcribing.rawValue, RecordingStatus.formatting.rawValue].contains(Recording.Columns.status))
                     .order(Recording.Columns.timestamp.asc)
                     .limit(1)
                     .fetchOne(db)
@@ -225,28 +340,35 @@ class RecordingStore: ObservableObject {
         }
     }
     
-    func updateRecordingProgressOnly(_ id: UUID, transcription: String, progress: Float, status: RecordingStatus) {
+    func updateRecordingProgressOnly(_ id: UUID, transcription: String, progress: Float, status: RecordingStatus, rawTranscription: String? = nil) {
         Task {
-            await updateRecordingProgressOnlySync(id, transcription: transcription, progress: progress, status: status)
+            await updateRecordingProgressOnlySync(id, transcription: transcription, progress: progress, status: status, rawTranscription: rawTranscription)
         }
     }
     
     static let recordingProgressDidUpdateNotification = Notification.Name("RecordingStore.recordingProgressDidUpdate")
     
-    func updateRecordingProgressOnlySync(_ id: UUID, transcription: String, progress: Float, status: RecordingStatus, isRegeneration: Bool? = nil) async {
+    func updateRecordingProgressOnlySync(_ id: UUID, transcription: String, progress: Float, status: RecordingStatus, rawTranscription: String? = nil, isRegeneration: Bool? = nil) async {
         do {
             _ = try await dbQueue.write { db -> Int in
-                try Recording
+                var assignments: [ColumnAssignment] = [
+                    Recording.Columns.transcription.set(to: transcription),
+                    Recording.Columns.progress.set(to: progress),
+                    Recording.Columns.status.set(to: status.rawValue)
+                ]
+                if let rawTranscription {
+                    assignments.append(Recording.Columns.rawTranscription.set(to: rawTranscription))
+                }
+                return try Recording
                     .filter(Recording.Columns.id == id)
-                    .updateAll(db, [
-                        Recording.Columns.transcription.set(to: transcription),
-                        Recording.Columns.progress.set(to: progress),
-                        Recording.Columns.status.set(to: status.rawValue)
-                    ])
+                    .updateAll(db, assignments)
             }
             if let index = recordings.firstIndex(where: { $0.id == id }) {
                 var updated = recordings[index]
                 updated.transcription = transcription
+                if let rawTranscription {
+                    updated.rawTranscription = rawTranscription
+                }
                 updated.progress = progress
                 updated.status = status
                 if let isRegeneration = isRegeneration {

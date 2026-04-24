@@ -276,6 +276,12 @@ class MicrophoneService: ObservableObject {
         selectedMicrophone = nil
         AppPreferences.shared.selectedMicrophoneData = nil
         updateCurrentMicrophone()
+
+        NotificationCenter.default.post(
+            name: .microphoneDidChange,
+            object: nil,
+            userInfo: currentMicrophone.map { ["device": $0] }
+        )
     }
     
     #if os(macOS)
@@ -480,4 +486,3 @@ class MicrophoneService: ObservableObject {
 extension Notification.Name {
     static let microphoneDidChange = Notification.Name("microphoneDidChange")
 }
-

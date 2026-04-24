@@ -5,7 +5,7 @@ set -e
 APP_NAME="OpenSuperWhisper"                                   
 APP_PATH="./build/Build/Products/Release/OpenSuperWhisper.app"                        
 ZIP_PATH="./build/OpenSuperWhisper.zip"                        
-BUNDLE_ID="ru.starmel.OpenSuperWhisper"                       
+BUNDLE_ID="com.vinitkumargoel.OpenSuperWhisperV2"
 KEYCHAIN_PROFILE="Slava"
 CODE_SIGN_IDENTITY="${1}"
 DEVELOPMENT_TEAM="8LLDD7HWZK"

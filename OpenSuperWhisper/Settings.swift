@@ -141,6 +141,33 @@ class SettingsViewModel: ObservableObject {
             AppPreferences.shared.addSpaceAfterSentence = addSpaceAfterSentence
         }
     }
+
+    @Published var codexFormattingEnabled: Bool {
+        didSet {
+            AppPreferences.shared.codexFormattingEnabled = codexFormattingEnabled
+        }
+    }
+
+    @Published var codexExecutablePath: String {
+        didSet {
+            AppPreferences.shared.codexExecutablePath = codexExecutablePath
+        }
+    }
+
+    @Published var codexModel: String {
+        didSet {
+            AppPreferences.shared.codexModel = codexModel
+        }
+    }
+
+    @Published var codexFormattingPrompt: String {
+        didSet {
+            AppPreferences.shared.codexFormattingPrompt = codexFormattingPrompt
+        }
+    }
+
+    @Published var analyticsSnapshot: AnalyticsSnapshot = .empty
+    @Published var isLoadingAnalytics: Bool = false
     
     init() {
         let prefs = AppPreferences.shared
@@ -161,6 +188,10 @@ class SettingsViewModel: ObservableObject {
         self.modifierOnlyHotkey = ModifierKey(rawValue: prefs.modifierOnlyHotkey) ?? .none
         self.holdToRecord = prefs.holdToRecord
         self.addSpaceAfterSentence = prefs.addSpaceAfterSentence
+        self.codexFormattingEnabled = prefs.codexFormattingEnabled
+        self.codexExecutablePath = prefs.codexExecutablePath
+        self.codexModel = prefs.codexModel
+        self.codexFormattingPrompt = prefs.codexFormattingPrompt
         
         if let savedPath = prefs.selectedWhisperModelPath ?? prefs.selectedModelPath {
             self.selectedModelURL = URL(fileURLWithPath: savedPath)
@@ -168,6 +199,27 @@ class SettingsViewModel: ObservableObject {
         loadAvailableModels()
         initializeDownloadableModels()
         initializeFluidAudioModels()
+        refreshAnalytics()
+    }
+
+    func refreshAnalytics() {
+        isLoadingAnalytics = true
+        Task {
+            do {
+                let recordings = try await RecordingStore.shared.fetchAnalyticsRecordings()
+                let snapshot = AnalyticsSnapshot(recordings: recordings)
+                await MainActor.run {
+                    self.analyticsSnapshot = snapshot
+                    self.isLoadingAnalytics = false
+                }
+            } catch {
+                print("Failed to load analytics: \(error)")
+                await MainActor.run {
+                    self.analyticsSnapshot = .empty
+                    self.isLoadingAnalytics = false
+                }
+            }
+        }
     }
     
     func initializeFluidAudioModels() {
@@ -481,6 +533,45 @@ struct SettingsDownloadableModels {
     ]
 }
 
+struct CodexFormattingModel: Identifiable {
+    let id: String
+    let displayName: String
+    let description: String
+
+    static let availableModels = [
+        CodexFormattingModel(
+            id: "gpt-5.4",
+            displayName: "gpt-5.4",
+            description: "Strong model for everyday coding."
+        ),
+        CodexFormattingModel(
+            id: "gpt-5.4-mini",
+            displayName: "GPT-5.4-Mini",
+            description: "Small, fast, and cost-efficient model for simpler coding tasks."
+        ),
+        CodexFormattingModel(
+            id: "gpt-5.3-codex",
+            displayName: "gpt-5.3-codex",
+            description: "Coding-optimized model."
+        ),
+        CodexFormattingModel(
+            id: "gpt-5.3-codex-spark",
+            displayName: "GPT-5.3-Codex-Spark",
+            description: "Ultra-fast coding model."
+        ),
+        CodexFormattingModel(
+            id: "gpt-5.2",
+            displayName: "gpt-5.2",
+            description: "Optimized for professional work and long-running agents."
+        ),
+        CodexFormattingModel(
+            id: "codex-auto-review",
+            displayName: "Codex Auto Review",
+            description: "Automatic approval review model for Codex."
+        )
+    ]
+}
+
 struct Settings {
     static let asianLanguages: Set<String> = ["zh", "ja", "ko"]
     
@@ -520,10 +611,12 @@ struct Settings {
 
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
+    @ObservedObject private var microphoneService = MicrophoneService.shared
     @Environment(\.dismiss) var dismiss
     @State private var isRecordingNewShortcut = false
     @State private var selectedTab = 0
     @State private var previousModelURL: URL?
+    private let automaticMicrophoneID = "__automatic__"
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -547,16 +640,34 @@ struct SettingsView: View {
                     Label("Transcription", systemImage: "text.bubble")
                 }
                 .tag(2)
+
+            formattingSettings
+                .tabItem {
+                    Label("Formatting", systemImage: "wand.and.stars")
+                }
+                .tag(3)
+
+            analyticsSettings
+                .tabItem {
+                    Label("Analytics", systemImage: "chart.bar.xaxis")
+                }
+                .tag(4)
+
+            audioSettings
+                .tabItem {
+                    Label("Audio", systemImage: "mic")
+                }
+                .tag(5)
             
             // Advanced Settings
             advancedSettings
                 .tabItem {
                     Label("Advanced", systemImage: "gear")
                 }
-                .tag(3)
+                .tag(6)
             }
         .padding()
-        .frame(width: 550)
+        .frame(width: 620)
         .background(Color(.windowBackgroundColor))
         .safeAreaInset(edge: .bottom) {
             HStack {
@@ -573,7 +684,7 @@ struct SettingsView: View {
                 
                 Spacer()
                 
-                Link(destination: URL(string: "https://github.com/Starmel/OpenSuperWhisper")!) {
+                Link(destination: URL(string: "https://github.com/vinitkumargoel/OpenSuperWhisper-v2")!) {
                     HStack(spacing: 4) {
                         Image(systemName: "star")
                             .font(.system(size: 10))
@@ -609,6 +720,299 @@ struct SettingsView: View {
                     TranscriptionService.shared.reloadModel(with: modelPath)
                 }
             }
+        }
+    }
+
+    private var analyticsSettings: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Usage Analytics")
+                        .font(.headline)
+
+                    Spacer()
+
+                    Text("Typing estimate: 40 wpm")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    Button {
+                        viewModel.refreshAnalytics()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(viewModel.isLoadingAnalytics)
+                    .help("Refresh analytics")
+                }
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ], spacing: 8) {
+                    AnalyticsMetricCard(title: "Today", value: "\(viewModel.analyticsSnapshot.todayRecordings)", detail: "recordings")
+                    AnalyticsMetricCard(title: "Today Min", value: analyticsMinutes(viewModel.analyticsSnapshot.todayDuration), detail: "recorded")
+                    AnalyticsMetricCard(title: "Today Words", value: analyticsNumber(viewModel.analyticsSnapshot.todayWords), detail: "transcribed")
+                    AnalyticsMetricCard(title: "All", value: analyticsNumber(viewModel.analyticsSnapshot.totalRecordings), detail: "recordings")
+                    AnalyticsMetricCard(title: "Total Min", value: analyticsMinutes(viewModel.analyticsSnapshot.totalDuration), detail: "recorded")
+                    AnalyticsMetricCard(title: "Total Words", value: analyticsNumber(viewModel.analyticsSnapshot.totalWords), detail: "transcribed")
+                }
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ], spacing: 8) {
+                    AnalyticsMetricCard(title: "Saved Today", value: TextUtil.formatDuration(viewModel.analyticsSnapshot.todayEstimatedTimeSaved), detail: "estimated")
+                    AnalyticsMetricCard(title: "Saved Total", value: TextUtil.formatDuration(viewModel.analyticsSnapshot.estimatedTimeSaved), detail: "estimated")
+                    AnalyticsMetricCard(title: "Avg Words", value: analyticsDecimal(viewModel.analyticsSnapshot.averageWordsPerRecording), detail: "per recording")
+                    AnalyticsMetricCard(title: "Pace", value: analyticsDecimal(viewModel.analyticsSnapshot.averageWordsPerMinute), detail: "words/min")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Last 7 Days")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Text("Words / recordings / audio")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(spacing: 4) {
+                        ForEach(viewModel.analyticsSnapshot.lastSevenDays) { day in
+                            AnalyticsDayRow(
+                                day: day,
+                                maxWords: max(viewModel.analyticsSnapshot.lastSevenDays.map(\.words).max() ?? 0, 1)
+                            )
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color(.controlBackgroundColor).opacity(0.25))
+                .cornerRadius(8)
+            }
+            .padding(14)
+        }
+        .onAppear {
+            viewModel.refreshAnalytics()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RecordingStore.recordingsDidUpdateNotification)) { _ in
+            viewModel.refreshAnalytics()
+        }
+    }
+
+    private func analyticsNumber(_ value: Int) -> String {
+        value.formatted(.number)
+    }
+
+    private func analyticsDecimal(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
+    private func analyticsMinutes(_ duration: TimeInterval) -> String {
+        let minutes = duration / 60
+        return minutes.formatted(.number.precision(.fractionLength(minutes < 10 ? 1 : 0)))
+    }
+
+    private var selectedMicrophoneID: Binding<String> {
+        Binding(
+            get: {
+                microphoneService.selectedMicrophone?.id ?? automaticMicrophoneID
+            },
+            set: { newValue in
+                if newValue == automaticMicrophoneID {
+                    microphoneService.resetToDefault()
+                    return
+                }
+
+                guard let microphone = microphoneService.availableMicrophones.first(where: { $0.id == newValue }) else {
+                    return
+                }
+                microphoneService.selectMicrophone(microphone)
+            }
+        )
+    }
+
+    private var builtInMicrophones: [MicrophoneService.AudioDevice] {
+        microphoneService.availableMicrophones.filter { $0.isBuiltIn }
+    }
+
+    private var externalMicrophones: [MicrophoneService.AudioDevice] {
+        microphoneService.availableMicrophones.filter { !$0.isBuiltIn }
+    }
+
+    private var audioSettings: some View {
+        Form {
+            VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Input Device")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Microphone")
+                                .font(.subheadline)
+
+                            Spacer()
+
+                            Picker("", selection: selectedMicrophoneID) {
+                                Text("Automatic").tag(automaticMicrophoneID)
+
+                                if !builtInMicrophones.isEmpty {
+                                    Divider()
+                                    ForEach(builtInMicrophones) { microphone in
+                                        Text(microphone.displayName).tag(microphone.id)
+                                    }
+                                }
+
+                                if !externalMicrophones.isEmpty {
+                                    Divider()
+                                    ForEach(externalMicrophones) { microphone in
+                                        Text(microphone.displayName).tag(microphone.id)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 260)
+                            .disabled(microphoneService.availableMicrophones.isEmpty)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color(.textBackgroundColor).opacity(0.5))
+                        .cornerRadius(8)
+
+                        if microphoneService.availableMicrophones.isEmpty {
+                            Text("No microphones available")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if let currentMicrophone = microphoneService.currentMicrophone {
+                            Text("Active: \(currentMicrophone.displayName)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button {
+                            microphoneService.refreshAvailableMicrophones()
+                        } label: {
+                            Label("Refresh Devices", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(12)
+            }
+            .padding()
+        }
+        .onAppear {
+            microphoneService.refreshAvailableMicrophones()
+        }
+    }
+
+    private var formattingSettings: some View {
+        Form {
+            VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Codex Auto Format")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Format with Codex")
+                                    .font(.subheadline)
+                                Text("After transcription, Codex corrects grammar and formatting before the text is saved and pasted.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $viewModel.codexFormattingEnabled)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Codex Command")
+                                .font(.subheadline)
+                            TextField("codex", text: $viewModel.codexExecutablePath)
+                                .textFieldStyle(.roundedBorder)
+                            Text("Use a full path if the app cannot find the logged-in Codex CLI.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Model")
+                                .font(.subheadline)
+
+                            Picker("Model", selection: $viewModel.codexModel) {
+                                ForEach(CodexFormattingModel.availableModels) { model in
+                                    Text(model.displayName).tag(model.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            if let selectedModel = CodexFormattingModel.availableModels.first(where: { $0.id == viewModel.codexModel }) {
+                                Text(selectedModel.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("Selected model: \(viewModel.codexModel)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Text("Detected from Codex model cache. Default: gpt-5.2")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(12)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("System Prompt")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    TextEditor(text: $viewModel.codexFormattingPrompt)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(height: 150)
+                        .padding(6)
+                        .background(Color(.textBackgroundColor))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                        )
+
+                    Button("Restore Default Prompt") {
+                        viewModel.codexFormattingPrompt = AppPreferences.defaultCodexFormattingPrompt
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(12)
+            }
+            .padding()
         }
     }
     
@@ -1358,6 +1762,91 @@ struct FluidAudioModelDownloadItemView: View {
     }
 }
 
+struct AnalyticsMetricCard: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+
+            Text(detail)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.textBackgroundColor).opacity(0.5))
+        .cornerRadius(6)
+    }
+}
+
+struct AnalyticsDayRow: View {
+    let day: AnalyticsDay
+    let maxWords: Int
+
+    private var barFraction: Double {
+        guard maxWords > 0 else { return 0 }
+        return Double(day.words) / Double(maxWords)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text(day.date, format: .dateTime.weekday(.abbreviated))
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text(day.date, format: .dateTime.month(.abbreviated).day())
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 66, alignment: .leading)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color(.separatorColor).opacity(0.25))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.accentColor.opacity(0.8))
+                        .frame(width: day.words == 0 ? 0 : max(4, geometry.size.width * barFraction))
+                }
+            }
+            .frame(height: 6)
+
+            HStack(spacing: 4) {
+                Text("\(day.words.formatted(.number))w")
+                    .font(.caption)
+                    .foregroundColor(.primary)
+                    .frame(width: 54, alignment: .trailing)
+                Text("\(day.recordings)r")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 28, alignment: .trailing)
+                Text(TextUtil.formatDuration(day.duration))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(width: 46, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color(.textBackgroundColor).opacity(0.35))
+        .cornerRadius(6)
+    }
+}
+
 struct ModelDownloadItemView: View {
     @Binding var model: SettingsDownloadableModel
     @ObservedObject var viewModel: SettingsViewModel
@@ -1459,4 +1948,3 @@ struct ModelDownloadItemView: View {
         }
     }
 }
-

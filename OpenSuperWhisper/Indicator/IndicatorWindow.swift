@@ -1,12 +1,14 @@
 import Cocoa
 import Combine
 import SwiftUI
+import AVFoundation
 
 enum RecordingState {
     case idle
     case connecting
     case recording
     case decoding
+    case formatting
     case busy
 }
 
@@ -111,7 +113,17 @@ class IndicatorViewModel: ObservableObject {
                 
                 do {
                     print("start decoding...")
-                    let text = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    let text = await FinalTextProcessor.formatIfNeeded(rawText) {
+                        await MainActor.run {
+                            self.state = .formatting
+                        }
+                    }
+                    let duration = await (try? Task.detached(priority: .userInitiated) {
+                        let asset = AVURLAsset(url: tempURL)
+                        let duration = try await asset.load(.duration)
+                        return CMTimeGetSeconds(duration)
+                    }.value) ?? 0.0
                     
                     // Create a new Recording instance
                     let timestamp = Date()
@@ -122,7 +134,8 @@ class IndicatorViewModel: ObservableObject {
                         timestamp: timestamp,
                         fileName: fileName,
                         transcription: text,
-                        duration: 0,
+                        rawTranscription: rawText,
+                        duration: duration,
                         status: .completed,
                         progress: 1.0,
                         sourceFileURL: nil
@@ -138,7 +151,8 @@ class IndicatorViewModel: ObservableObject {
                             timestamp: timestamp,
                             fileName: fileName,
                             transcription: text,
-                            duration: 0,
+                            rawTranscription: rawText,
+                            duration: duration,
                             status: .completed,
                             progress: 1.0,
                             sourceFileURL: nil
@@ -169,17 +183,8 @@ class IndicatorViewModel: ObservableObject {
     }
     
     func insertText(_ text: String) {
-        let finalText = Self.applyPostProcessing(text)
+        let finalText = FinalTextProcessor.applyPastePostProcessing(text)
         ClipboardUtil.insertText(finalText)
-    }
-    
-    static func applyPostProcessing(_ text: String) -> String {
-        guard AppPreferences.shared.addSpaceAfterSentence,
-              let lastChar = text.last,
-              lastChar.isPunctuation else {
-            return text
-        }
-        return text + " "
     }
     
     private func startBlinking() {
@@ -290,6 +295,17 @@ struct IndicatorWindow: View {
                         .frame(width: 24)
                     
                     Text("Transcribing...")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            case .formatting:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 24)
+
+                    Text("Formatting...")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
