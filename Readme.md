@@ -7,6 +7,14 @@ OpenSuperWhisper v2 is a macOS menu bar dictation and audio transcription app fo
   <img src="docs/image_indicator.png" width="400" />
 </p>
 
+<p align="center">
+  <img src="docs/screenshot_formatting.png" width="720" />
+</p>
+
+## Project Lineage
+
+OpenSuperWhisper v2 is based on the open-source [OpenSuperWhisper](https://github.com/Starmel/OpenSuperWhisper) project. This fork keeps the local macOS dictation foundation and extends it with v2-specific workflow, formatting, analytics, and repository identity changes.
+
 ## What Is New In This Version
 
 - Codex auto-formatting: clean grammar, remove filler words, and preserve the original meaning before saving or pasting text.
@@ -89,6 +97,15 @@ Codex formatting is optional and disabled by default. To use it:
 4. Choose the Codex command, model, and system prompt.
 
 When enabled, OpenSuperWhisper first stores the raw transcript, then asks Codex to return clean final text. If Codex fails or times out, the raw transcript is kept.
+
+## Future Pipeline
+
+The next planned direction is to make post-transcription processing provider-flexible:
+
+- Ollama support for fully local formatting, summarization, and command workflows.
+- Claude support for higher-quality cleanup, rewriting, and agent-style transcript actions.
+- Provider presets so users can switch between Codex, Ollama, Claude, and other local or cloud models.
+- More automation hooks for turning voice notes into structured tasks, documents, messages, or research prompts.
 
 ## Model Downloads
 
