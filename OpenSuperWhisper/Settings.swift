@@ -1574,13 +1574,13 @@ struct SettingsView: View {
                         }
 
                         HStack {
-                            Text("Pause media while recording")
+                            Text("Mute system sound while recording")
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.pauseMediaDuringRecording)
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
-                                .help("Pause active media when recording starts and resume it when recording stops")
+                                .help("Set system output volume to 0 when recording starts and restore it when recording stops")
                         }
                     }
                 }

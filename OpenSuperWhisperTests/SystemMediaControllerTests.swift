@@ -1,84 +1,100 @@
+import CoreAudio
 import XCTest
 @testable import OpenSuperWhisper
 
 final class SystemMediaControllerTests: XCTestCase {
-    func testRecordingLifecycleWithPlayingMediaPausesAndResumes() {
-        let backend = MockMediaCommandBackend(isPlaying: true)
+    func testRecordingLifecycleCapturesMutesAndRestoresVolume() {
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let backend = MockSystemVolumeBackend(snapshot: snapshot)
         let controller = SystemMediaController(backend: backend)
 
         controller.recordingDidStart(enabled: true)
         controller.recordingDidStop()
 
-        XCTAssertEqual(backend.pauseCallCount, 1)
-        XCTAssertEqual(backend.playCallCount, 1)
+        XCTAssertEqual(backend.currentVolumeCallCount, 1)
+        XCTAssertEqual(backend.mutedSnapshots, [snapshot])
+        XCTAssertEqual(backend.restoredSnapshots, [snapshot])
     }
 
-    func testRecordingLifecycleWithNoPlayingMediaDoesNotResumePlayback() {
-        let backend = MockMediaCommandBackend(isPlaying: false)
+    func testNoVolumeSnapshotDoesNotMuteOrRestore() {
+        let backend = MockSystemVolumeBackend(snapshot: nil)
         let controller = SystemMediaController(backend: backend)
 
         controller.recordingDidStart(enabled: true)
         controller.recordingDidStop()
 
-        XCTAssertEqual(backend.pauseCallCount, 0)
-        XCTAssertEqual(backend.playCallCount, 0)
+        XCTAssertEqual(backend.currentVolumeCallCount, 1)
+        XCTAssertTrue(backend.mutedSnapshots.isEmpty)
+        XCTAssertTrue(backend.restoredSnapshots.isEmpty)
     }
 
-    func testCancelAfterPauseResumesPlayback() {
-        let backend = MockMediaCommandBackend(isPlaying: true)
+    func testStopWithoutStartDoesNotRestore() {
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let backend = MockSystemVolumeBackend(snapshot: snapshot)
+        let controller = SystemMediaController(backend: backend)
+
+        controller.recordingDidStop()
+
+        XCTAssertEqual(backend.currentVolumeCallCount, 0)
+        XCTAssertTrue(backend.mutedSnapshots.isEmpty)
+        XCTAssertTrue(backend.restoredSnapshots.isEmpty)
+    }
+
+    func testRepeatedStartRestoresOnlyLatestCapturedVolume() {
+        let first = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let second = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.4])
+        let backend = MockSystemVolumeBackend(snapshots: [first, second])
         let controller = SystemMediaController(backend: backend)
 
         controller.recordingDidStart(enabled: true)
-        controller.recordingDidStop()
-
-        XCTAssertEqual(backend.pauseCallCount, 1)
-        XCTAssertEqual(backend.playCallCount, 1)
-    }
-
-    func testRepeatedStartDoesNotDoubleResume() {
-        let backend = MockMediaCommandBackend(isPlaying: true)
-        let controller = SystemMediaController(backend: backend)
-
-        controller.recordingDidStart(enabled: true)
         controller.recordingDidStart(enabled: true)
         controller.recordingDidStop()
 
-        XCTAssertEqual(backend.pauseCallCount, 2)
-        XCTAssertEqual(backend.playCallCount, 1)
+        XCTAssertEqual(backend.mutedSnapshots, [first, second])
+        XCTAssertEqual(backend.restoredSnapshots, [second])
     }
 
-    func testDisabledPreferenceDoesNotIssueMediaCommands() {
-        let backend = MockMediaCommandBackend(isPlaying: true)
+    func testDisabledPreferenceDoesNotChangeVolume() {
+        let snapshot = OutputVolumeSnapshot(deviceID: 42, channels: [0: 0.7])
+        let backend = MockSystemVolumeBackend(snapshot: snapshot)
         let controller = SystemMediaController(backend: backend)
 
         controller.recordingDidStart(enabled: false)
         controller.recordingDidStop()
 
-        XCTAssertEqual(backend.pauseCallCount, 0)
-        XCTAssertEqual(backend.playCallCount, 0)
+        XCTAssertEqual(backend.currentVolumeCallCount, 0)
+        XCTAssertTrue(backend.mutedSnapshots.isEmpty)
+        XCTAssertTrue(backend.restoredSnapshots.isEmpty)
     }
 }
 
-private final class MockMediaCommandBackend: MediaCommandBackend {
-    var isPlaying: Bool
-    private(set) var pauseCallCount = 0
-    private(set) var playCallCount = 0
-    private(set) var isMediaPlayingCallCount = 0
+private final class MockSystemVolumeBackend: SystemVolumeBackend {
+    private var snapshots: [OutputVolumeSnapshot?]
+    private(set) var currentVolumeCallCount = 0
+    private(set) var mutedSnapshots: [OutputVolumeSnapshot] = []
+    private(set) var restoredSnapshots: [OutputVolumeSnapshot] = []
 
-    init(isPlaying: Bool) {
-        self.isPlaying = isPlaying
+    init(snapshot: OutputVolumeSnapshot?) {
+        self.snapshots = [snapshot]
     }
 
-    func isMediaPlaying(timeout: TimeInterval) -> Bool {
-        isMediaPlayingCallCount += 1
-        return isPlaying
+    init(snapshots: [OutputVolumeSnapshot?]) {
+        self.snapshots = snapshots
     }
 
-    func pause() {
-        pauseCallCount += 1
+    func currentOutputVolume() -> OutputVolumeSnapshot? {
+        currentVolumeCallCount += 1
+        if snapshots.isEmpty { return nil }
+        return snapshots.removeFirst()
     }
 
-    func play() {
-        playCallCount += 1
+    func setOutputVolume(_ volume: Float32, for snapshot: OutputVolumeSnapshot) {
+        if volume == 0 {
+            mutedSnapshots.append(snapshot)
+        }
+    }
+
+    func restoreOutputVolume(_ snapshot: OutputVolumeSnapshot) {
+        restoredSnapshots.append(snapshot)
     }
 }
