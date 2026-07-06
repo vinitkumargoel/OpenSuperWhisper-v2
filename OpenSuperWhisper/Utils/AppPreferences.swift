@@ -23,7 +23,7 @@ struct OptionalUserDefault<T> {
 
 final class AppPreferences {
     static let shared = AppPreferences()
-    static let defaultCodexFormattingPrompt = """
+    static let defaultFormattingPrompt = """
     Rewrite the transcript into clean, grammatically correct, well-formatted text. Remove filler words, repeated false starts, transcription artifacts, timestamps, bracketed annotations, speaker labels, and non-content notes. Preserve the speaker's meaning, names, numbers, language, and intent. Do not summarize, answer questions, add new ideas, or wrap the output in quotes or Markdown. Return only the final cleaned text.
     """
 
@@ -118,15 +118,20 @@ final class AppPreferences {
     @UserDefault(key: "addSpaceAfterSentence", defaultValue: true)
     var addSpaceAfterSentence: Bool
 
+    // LLM formatting (any OpenAI-compatible endpoint).
+    // Key names for the toggle and prompt predate the LLM backend, kept for migration.
     @UserDefault(key: "codexFormattingEnabled", defaultValue: false)
-    var codexFormattingEnabled: Bool
+    var formattingEnabled: Bool
 
-    @UserDefault(key: "codexExecutablePath", defaultValue: "codex")
-    var codexExecutablePath: String
+    @UserDefault(key: "llmBaseURL", defaultValue: "https://api.openai.com/v1")
+    var llmBaseURL: String
 
-    @UserDefault(key: "codexModel", defaultValue: "gpt-5.2")
-    var codexModel: String
+    @UserDefault(key: "llmApiKey", defaultValue: "")
+    var llmApiKey: String
 
-    @UserDefault(key: "codexFormattingPrompt", defaultValue: AppPreferences.defaultCodexFormattingPrompt)
-    var codexFormattingPrompt: String
+    @UserDefault(key: "llmModel", defaultValue: "gpt-4o-mini")
+    var llmModel: String
+
+    @UserDefault(key: "codexFormattingPrompt", defaultValue: AppPreferences.defaultFormattingPrompt)
+    var formattingPrompt: String
 }

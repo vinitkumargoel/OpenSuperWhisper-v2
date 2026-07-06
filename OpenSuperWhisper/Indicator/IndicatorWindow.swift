@@ -21,12 +21,13 @@ protocol IndicatorViewDelegate: AnyObject {
 @MainActor
 class IndicatorViewModel: ObservableObject {
     @Published var state: RecordingState = .idle
-    @Published var isBlinking = false
+    @Published var elapsed: TimeInterval = 0
     @Published var recorder: AudioRecorder = .shared
     @Published var isVisible = false
-    
+
     var delegate: IndicatorViewDelegate?
-    private var blinkTimer: Timer?
+    private var recordingTimer: Timer?
+    private var recordingStart: Date?
     private var hideTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     
@@ -45,7 +46,7 @@ class IndicatorViewModel: ObservableObject {
                 guard let self = self else { return }
                 if isConnecting {
                     self.state = .connecting
-                    self.stopBlinking()
+                    self.stopRecordingTimer()
                 }
             }
             .store(in: &cancellables)
@@ -56,7 +57,7 @@ class IndicatorViewModel: ObservableObject {
                 guard let self = self else { return }
                 if isRecording {
                     self.state = .recording
-                    self.startBlinking()
+                    self.startRecordingTimer()
                 }
             }
             .store(in: &cancellables)
@@ -64,6 +65,11 @@ class IndicatorViewModel: ObservableObject {
     
     var isTranscriptionBusy: Bool {
         transcriptionService.isTranscribing || transcriptionQueue.isProcessing
+    }
+
+    var elapsedString: String {
+        let total = Int(elapsed)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
     
     func showBusyMessage() {
@@ -85,10 +91,10 @@ class IndicatorViewModel: ObservableObject {
         
         if MicrophoneService.shared.isActiveMicrophoneRequiresConnection() {
             state = .connecting
-            stopBlinking()
+            stopRecordingTimer()
         } else {
             state = .recording
-            startBlinking()
+            startRecordingTimer()
         }
         
         Task.detached { [recorder] in
@@ -97,7 +103,7 @@ class IndicatorViewModel: ObservableObject {
     }
     
     func startDecoding() {
-        stopBlinking()
+        stopRecordingTimer()
         
         if isTranscriptionBusy {
             recorder.cancelRecording()
@@ -187,25 +193,27 @@ class IndicatorViewModel: ObservableObject {
         ClipboardUtil.insertText(finalText)
     }
     
-    private func startBlinking() {
-        blinkTimer?.invalidate()
-        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
-            // Update UI on the main thread
+    private func startRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingStart = Date()
+        elapsed = 0
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self = self else { return }
-                self.isBlinking.toggle()
+                guard let self = self, let start = self.recordingStart else { return }
+                self.elapsed = Date().timeIntervalSince(start)
             }
         }
     }
-    
-    private func stopBlinking() {
-        blinkTimer?.invalidate()
-        blinkTimer = nil
-        isBlinking = false
+
+    private func stopRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        recordingStart = nil
+        elapsed = 0
     }
 
     func cleanup() {
-        stopBlinking()
+        stopRecordingTimer()
         hideTimer?.invalidate()
         hideTimer = nil
         cancellables.removeAll()
@@ -230,24 +238,25 @@ class IndicatorViewModel: ObservableObject {
 }
 
 struct RecordingIndicator: View {
-    let isBlinking: Bool
-    
+    @State private var pulsing = false
+
     var body: some View {
         Circle()
             .fill(
                 LinearGradient(
                     colors: [
-                        Color.red.opacity(0.8),
+                        Color.red.opacity(0.85),
                         Color.red
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             )
-            .frame(width: 8, height: 8)
-            .shadow(color: .red.opacity(0.5), radius: 4)
-            .opacity(isBlinking ? 0.3 : 1.0)
-            .animation(.easeInOut(duration: 0.4), value: isBlinking)
+            .frame(width: 9, height: 9)
+            .shadow(color: .red.opacity(0.7), radius: 5)
+            .opacity(pulsing ? 0.25 : 1.0)
+            .animation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true), value: pulsing)
+            .onAppear { pulsing = true }
     }
 }
 
@@ -280,11 +289,16 @@ struct IndicatorWindow: View {
                 
             case .recording:
                 HStack(spacing: 8) {
-                    RecordingIndicator(isBlinking: viewModel.isBlinking)
+                    RecordingIndicator()
                         .frame(width: 24)
-                    
-                    Text("Recording...")
+
+                    Text("Recording")
                         .font(.system(size: 13, weight: .semibold))
+
+                    Text("· \(viewModel.elapsedString)")
+                        .font(.system(size: 12, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 

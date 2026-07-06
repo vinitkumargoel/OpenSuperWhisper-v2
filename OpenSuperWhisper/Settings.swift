@@ -148,27 +148,54 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
-    @Published var codexFormattingEnabled: Bool {
+    @Published var formattingEnabled: Bool {
         didSet {
-            AppPreferences.shared.codexFormattingEnabled = codexFormattingEnabled
+            AppPreferences.shared.formattingEnabled = formattingEnabled
         }
     }
 
-    @Published var codexExecutablePath: String {
+    @Published var llmBaseURL: String {
         didSet {
-            AppPreferences.shared.codexExecutablePath = codexExecutablePath
+            AppPreferences.shared.llmBaseURL = llmBaseURL
         }
     }
 
-    @Published var codexModel: String {
+    @Published var llmApiKey: String {
         didSet {
-            AppPreferences.shared.codexModel = codexModel
+            AppPreferences.shared.llmApiKey = llmApiKey
         }
     }
 
-    @Published var codexFormattingPrompt: String {
+    @Published var llmModel: String {
         didSet {
-            AppPreferences.shared.codexFormattingPrompt = codexFormattingPrompt
+            AppPreferences.shared.llmModel = llmModel
+        }
+    }
+
+    @Published var formattingPrompt: String {
+        didSet {
+            AppPreferences.shared.formattingPrompt = formattingPrompt
+        }
+    }
+
+    @Published var availableLLMModels: [String] = []
+    @Published var isFetchingLLMModels: Bool = false
+    @Published var llmModelsFetchError: String?
+
+    func fetchLLMModels() {
+        isFetchingLLMModels = true
+        llmModelsFetchError = nil
+        let baseURL = llmBaseURL
+        let apiKey = llmApiKey
+        Task { @MainActor in
+            defer { isFetchingLLMModels = false }
+            do {
+                availableLLMModels = try await LLMTextFormatter.fetchAvailableModels(
+                    baseURL: baseURL, apiKey: apiKey)
+            } catch {
+                availableLLMModels = []
+                llmModelsFetchError = error.localizedDescription
+            }
         }
     }
 
@@ -195,10 +222,11 @@ class SettingsViewModel: ObservableObject {
         self.modifierOnlyHotkey = ModifierKey(rawValue: prefs.modifierOnlyHotkey) ?? .none
         self.holdToRecord = prefs.holdToRecord
         self.addSpaceAfterSentence = prefs.addSpaceAfterSentence
-        self.codexFormattingEnabled = prefs.codexFormattingEnabled
-        self.codexExecutablePath = prefs.codexExecutablePath
-        self.codexModel = prefs.codexModel
-        self.codexFormattingPrompt = prefs.codexFormattingPrompt
+        self.formattingEnabled = prefs.formattingEnabled
+        self.llmBaseURL = prefs.llmBaseURL
+        self.llmApiKey = prefs.llmApiKey
+        self.llmModel = prefs.llmModel
+        self.formattingPrompt = prefs.formattingPrompt
         
         if let savedPath = prefs.selectedWhisperModelPath ?? prefs.selectedModelPath {
             self.selectedModelURL = URL(fileURLWithPath: savedPath)
@@ -411,7 +439,7 @@ class SettingsViewModel: ObservableObject {
                 }
                 
                 let manager = AsrManager(config: .default)
-                try await manager.initialize(models: models)
+                try await manager.loadModels(models)
                 
                 await MainActor.run {
                     if let index = downloadableFluidAudioModels.firstIndex(where: { $0.id == model.id }) {
@@ -536,45 +564,6 @@ struct SettingsDownloadableModels {
             url: URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin?download=true")!,
             size: 574,
             description: "Fastest processing"
-        )
-    ]
-}
-
-struct CodexFormattingModel: Identifiable {
-    let id: String
-    let displayName: String
-    let description: String
-
-    static let availableModels = [
-        CodexFormattingModel(
-            id: "gpt-5.4",
-            displayName: "gpt-5.4",
-            description: "Strong model for everyday coding."
-        ),
-        CodexFormattingModel(
-            id: "gpt-5.4-mini",
-            displayName: "GPT-5.4-Mini",
-            description: "Small, fast, and cost-efficient model for simpler coding tasks."
-        ),
-        CodexFormattingModel(
-            id: "gpt-5.3-codex",
-            displayName: "gpt-5.3-codex",
-            description: "Coding-optimized model."
-        ),
-        CodexFormattingModel(
-            id: "gpt-5.3-codex-spark",
-            displayName: "GPT-5.3-Codex-Spark",
-            description: "Ultra-fast coding model."
-        ),
-        CodexFormattingModel(
-            id: "gpt-5.2",
-            displayName: "gpt-5.2",
-            description: "Optimized for professional work and long-running agents."
-        ),
-        CodexFormattingModel(
-            id: "codex-auto-review",
-            displayName: "Codex Auto Review",
-            description: "Automatic approval review model for Codex."
         )
     ]
 }
@@ -929,31 +918,41 @@ struct SettingsView: View {
         Form {
             VStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Codex Auto Format")
+                    Text("AI Auto Format")
                         .font(.headline)
                         .foregroundColor(.primary)
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Format with Codex")
+                                Text("Format with AI")
                                     .font(.subheadline)
-                                Text("After transcription, Codex corrects grammar and formatting before the text is saved and pasted.")
+                                Text("After transcription, an LLM corrects grammar and formatting before the text is saved and pasted.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
                             Spacer()
-                            Toggle("", isOn: $viewModel.codexFormattingEnabled)
+                            Toggle("", isOn: $viewModel.formattingEnabled)
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Codex Command")
+                            Text("API Base URL")
                                 .font(.subheadline)
-                            TextField("codex", text: $viewModel.codexExecutablePath)
+                            TextField("https://api.openai.com/v1", text: $viewModel.llmBaseURL)
                                 .textFieldStyle(.roundedBorder)
-                            Text("Use a full path if the app cannot find the logged-in Codex CLI.")
+                            Text("Any OpenAI-compatible endpoint: OpenAI, OpenRouter, Groq, Ollama (http://localhost:11434/v1), LM Studio, ...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("API Key")
+                                .font(.subheadline)
+                            SecureField("sk-...", text: $viewModel.llmApiKey)
+                                .textFieldStyle(.roundedBorder)
+                            Text("Leave empty for local servers that don't need a key.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -962,28 +961,41 @@ struct SettingsView: View {
                             Text("Model")
                                 .font(.subheadline)
 
-                            Picker("Model", selection: $viewModel.codexModel) {
-                                ForEach(CodexFormattingModel.availableModels) { model in
-                                    Text(model.displayName).tag(model.id)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack(spacing: 8) {
+                                TextField("gpt-4o-mini", text: $viewModel.llmModel)
+                                    .textFieldStyle(.roundedBorder)
 
-                            if let selectedModel = CodexFormattingModel.availableModels.first(where: { $0.id == viewModel.codexModel }) {
-                                Text(selectedModel.description)
+                                if !viewModel.availableLLMModels.isEmpty {
+                                    Picker("", selection: $viewModel.llmModel) {
+                                        ForEach(viewModel.availableLLMModels, id: \.self) { model in
+                                            Text(model).tag(model)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
+                                    .frame(width: 180)
+                                }
+
+                                Button(viewModel.isFetchingLLMModels ? "Fetching..." : "Fetch Models") {
+                                    viewModel.fetchLLMModels()
+                                }
+                                .disabled(viewModel.isFetchingLLMModels)
+                                .controlSize(.small)
+                            }
+
+                            if let fetchError = viewModel.llmModelsFetchError {
+                                Text(fetchError)
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            } else if !viewModel.availableLLMModels.isEmpty {
+                                Text("\(viewModel.availableLLMModels.count) models available from this endpoint.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             } else {
-                                Text("Selected model: \(viewModel.codexModel)")
+                                Text("Type a model id, or fetch the endpoint's model list and pick from it.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
-
-                            Text("Detected from Codex model cache. Default: gpt-5.2")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -997,7 +1009,7 @@ struct SettingsView: View {
                         .font(.headline)
                         .foregroundColor(.primary)
 
-                    TextEditor(text: $viewModel.codexFormattingPrompt)
+                    TextEditor(text: $viewModel.formattingPrompt)
                         .font(.system(.body, design: .monospaced))
                         .frame(height: 150)
                         .padding(6)
@@ -1009,7 +1021,7 @@ struct SettingsView: View {
                         )
 
                     Button("Restore Default Prompt") {
-                        viewModel.codexFormattingPrompt = AppPreferences.defaultCodexFormattingPrompt
+                        viewModel.formattingPrompt = AppPreferences.defaultFormattingPrompt
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)

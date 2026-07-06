@@ -1,0 +1,164 @@
+import Foundation
+
+enum LLMTextFormatterError: LocalizedError {
+    case invalidURL
+    case missingAPIKey
+    case emptyOutput
+    case httpError(Int, String)
+    case decodingFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "The formatting API base URL is invalid."
+        case .missingAPIKey:
+            return "No API key configured for formatting."
+        case .emptyOutput:
+            return "The formatting model returned an empty response."
+        case .httpError(let code, let message):
+            return "Formatting request failed (HTTP \(code)): \(message)"
+        case .decodingFailed:
+            return "Could not decode the formatting API response."
+        }
+    }
+}
+
+/// Formats transcripts via any OpenAI-compatible chat completions API
+/// (OpenAI, OpenRouter, Groq, Ollama, LM Studio, llama.cpp server, ...).
+struct LLMTextFormatter {
+    private let timeout: TimeInterval = 60
+
+    func format(_ text: String) async throws -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return text }
+
+        let prefs = AppPreferences.shared
+        let baseURL = Self.normalizedBaseURL(prefs.llmBaseURL)
+        let apiKey = prefs.llmApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = prefs.llmModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let instruction = prefs.formattingPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let url = URL(string: baseURL + "/chat/completions") else {
+            throw LLMTextFormatterError.invalidURL
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        let body: [String: Any] = [
+            "model": model,
+            "temperature": 0.2,
+            "messages": [
+                ["role": "system", "content": instruction.isEmpty ? AppPreferences.defaultFormattingPrompt : instruction],
+                ["role": "user", "content": trimmedText],
+            ],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMTextFormatterError.decodingFailed
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+            throw LLMTextFormatterError.httpError(http.statusCode, String(message))
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            throw LLMTextFormatterError.decodingFailed
+        }
+
+        let cleaned = Self.cleanOutput(content)
+        guard !cleaned.isEmpty else {
+            throw LLMTextFormatterError.emptyOutput
+        }
+        return cleaned
+    }
+
+    /// Lists model ids from {baseURL}/models for the settings picker.
+    static func fetchAvailableModels(baseURL: String, apiKey: String) async throws -> [String] {
+        guard let url = URL(string: normalizedBaseURL(baseURL) + "/models") else {
+            throw LLMTextFormatterError.invalidURL
+        }
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty {
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMTextFormatterError.decodingFailed
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+            throw LLMTextFormatterError.httpError(http.statusCode, String(message))
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["data"] as? [[String: Any]] else {
+            throw LLMTextFormatterError.decodingFailed
+        }
+        return models.compactMap { $0["id"] as? String }.sorted()
+    }
+
+    static func normalizedBaseURL(_ raw: String) -> String {
+        var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") {
+            base = String(base.dropLast())
+        }
+        // Bare host[:port] input like "100.105.72.106:8317/v1" — assume http.
+        if !base.isEmpty, !base.lowercased().hasPrefix("http://"), !base.lowercased().hasPrefix("https://") {
+            base = "http://" + base
+        }
+        return base
+    }
+
+    private static func cleanOutput(_ output: String) -> String {
+        var cleaned = output.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cleaned.hasPrefix("```") {
+            var lines = cleaned.components(separatedBy: .newlines)
+            if let first = lines.first, first.hasPrefix("```") {
+                lines.removeFirst()
+            }
+            if let last = lines.last, last.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
+                lines.removeLast()
+            }
+            cleaned = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return cleaned
+    }
+}
+
+enum FinalTextProcessor {
+    static func formatIfNeeded(_ text: String, onWillFormat: (() async -> Void)? = nil) async -> String {
+        guard AppPreferences.shared.formattingEnabled else {
+            return text
+        }
+
+        do {
+            await onWillFormat?()
+            return try await LLMTextFormatter().format(text)
+        } catch {
+            print("LLM formatting failed: \(error.localizedDescription)")
+            return text
+        }
+    }
+
+    static func applyPastePostProcessing(_ text: String) -> String {
+        guard AppPreferences.shared.addSpaceAfterSentence,
+              let lastChar = text.last,
+              lastChar.isPunctuation else {
+            return text
+        }
+        return text + " "
+    }
+}
