@@ -25,6 +25,7 @@ class ContentViewModel: ObservableObject {
     @Published var recordingDuration: TimeInterval = 0
     @Published var microphoneService = MicrophoneService.shared
     @Published var shouldClearSearch = false
+    @Published var starredOnly = false
     
     private var currentPage = 0
     private let pageSize = 100
@@ -86,11 +87,12 @@ class ContentViewModel: ObservableObject {
         
         
         Task {
+            let onlyStarred = self.starredOnly
             let newRecordings: [Recording]
             if query.isEmpty {
-                newRecordings = try await recordingStore.fetchRecordings(limit: limit, offset: offset)
+                newRecordings = try await recordingStore.fetchRecordings(limit: limit, offset: offset, starredOnly: onlyStarred)
             } else {
-                newRecordings = await recordingStore.searchRecordingsAsync(query: query, limit: limit, offset: offset)
+                newRecordings = await recordingStore.searchRecordingsAsync(query: query, limit: limit, offset: offset, starredOnly: onlyStarred)
             }
             
             
@@ -100,8 +102,8 @@ class ContentViewModel: ObservableObject {
                 }
                 
                 // Ensure we are still consistent with the request (basic check)
-                guard self.currentSearchQuery == query else { 
-                    return 
+                guard self.currentSearchQuery == query, self.starredOnly == onlyStarred else {
+                    return
                 }
                 
                 if page == 0 {
@@ -144,6 +146,25 @@ class ContentViewModel: ObservableObject {
         recordingStore.deleteRecording(recording)
         if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
             recordings.remove(at: index)
+        }
+    }
+
+    /// Reload the list when the Starred-only filter toggles.
+    func setStarredOnly(_ value: Bool) {
+        starredOnly = value
+        currentPage = 0
+        canLoadMore = true
+        recordings = []
+        loadMore()
+    }
+
+    func toggleStar(_ recording: Recording) {
+        let newValue = !recording.isStarred
+        recordingStore.setStarred(recording.id, newValue)
+        if starredOnly && !newValue {
+            recordings.removeAll { $0.id == recording.id }
+        } else if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index].isStarred = newValue
         }
     }
     
@@ -230,7 +251,9 @@ class ContentViewModel: ObservableObject {
                             duration: self.recordingDuration,
                             status: .completed,
                             progress: 1.0,
-                            sourceFileURL: nil
+                            sourceFileURL: nil,
+                            targetAppName: FocusUtils.lastFrontmostAppName,
+                            targetAppBundleID: FocusUtils.lastFrontmostBundleID
                         )
                         self.recordingStore.addRecording(newRecording)
                         
@@ -394,6 +417,16 @@ struct ContentView: View {
                             }
                             .buttonStyle(.plain)
                         }
+
+                        Button(action: {
+                            viewModel.setStarredOnly(!viewModel.starredOnly)
+                        }) {
+                            Image(systemName: viewModel.starredOnly ? "star.fill" : "star")
+                                .foregroundColor(viewModel.starredOnly ? .yellow : .secondary)
+                                .imageScale(.medium)
+                        }
+                        .buttonStyle(.plain)
+                        .help(viewModel.starredOnly ? "Showing starred only" : "Show starred only")
                     }
                     .padding(10)
                     .background(ThemePalette.panelSurface(colorScheme))
@@ -483,6 +516,9 @@ struct ContentView: View {
                                             Task {
                                                 await TranscriptionQueue.shared.requeueRecording(recording)
                                             }
+                                        },
+                                        onToggleStar: {
+                                            viewModel.toggleStar(recording)
                                         }
                                     )
                                     .id(recording.id)
@@ -788,6 +824,7 @@ struct RecordingRow: View {
     let searchQuery: String
     let onDelete: () -> Void
     let onRegenerate: () -> Void
+    var onToggleStar: () -> Void = {}
     @StateObject private var audioRecorder = AudioRecorder.shared
     @State private var showTranscription = false
     @State private var showRawTranscription = false
@@ -978,6 +1015,22 @@ struct RecordingRow: View {
                         Text(TextUtil.formatDuration(recording.duration))
                         Text("·")
                         Text("^[\(TextUtil.wordCount(recording.transcription)) word](inflect: true)")
+
+                        if let appName = recording.targetAppName, !appName.isEmpty {
+                            Text("·")
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.right.circle.fill")
+                                    .font(.system(size: 9))
+                                Text(appName)
+                            }
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(SettingsTheme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(SettingsTheme.accent.opacity(0.12))
+                            .clipShape(Capsule())
+                            .help("Pasted into \(appName)")
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -1022,6 +1075,19 @@ struct RecordingRow: View {
                 Spacer()
 
                 HStack(spacing: 16) {
+                    if recording.status == .completed && (isHovered || recording.isStarred) {
+                        Button(action: {
+                            onToggleStar()
+                        }) {
+                            Image(systemName: recording.isStarred ? "star.fill" : "star")
+                                .font(.system(size: 17))
+                                .foregroundColor(recording.isStarred ? .yellow : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(recording.isStarred ? "Unstar" : "Star")
+                        .transition(.opacity)
+                    }
+
                     if !isPending && recording.status != .failed && (isHovered || isPlaying) {
                         Button(action: {
                             if isPlaying {
@@ -1125,6 +1191,14 @@ struct RecordingRow: View {
             isHovered = hovering
         }
         .contextMenu {
+            if recording.status == .completed {
+                Button {
+                    onToggleStar()
+                } label: {
+                    Label(recording.isStarred ? "Unstar" : "Star",
+                          systemImage: recording.isStarred ? "star.slash" : "star")
+                }
+            }
             if !recording.transcription.isEmpty {
                 Button {
                     copyToPasteboard(recording.transcription)

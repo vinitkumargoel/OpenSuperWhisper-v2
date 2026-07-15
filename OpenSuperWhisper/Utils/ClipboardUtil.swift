@@ -4,9 +4,18 @@ import Carbon
 
 class ClipboardUtil {
     
+    /// Places text on the clipboard without simulating a paste. Used when
+    /// auto-paste is disabled or Accessibility permission is unavailable.
+    static func copyToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.declareTypes([.string], owner: nil)
+        pasteboard.setString(text, forType: .string)
+    }
+
     static func insertText(_ text: String) {
         let pasteboard = NSPasteboard.general
-        
+
         // Save current pasteboard contents
         let savedContents = saveCurrentPasteboardContents()
         

@@ -145,19 +145,26 @@ struct LLMTextFormatter {
 
 enum FinalTextProcessor {
     static func formatIfNeeded(_ text: String, onWillFormat: (() async -> Void)? = nil) async -> String {
+        // Spoken punctuation/formatting commands ("period", "new line") are
+        // resolved first, on the raw transcript, when the user enables them.
+        var input = text
+        if AppPreferences.shared.dictationCommandsEnabled {
+            input = DictationCommandProcessor.apply(input)
+        }
+
         // Custom-vocabulary substitutions always apply — even with AI formatting
         // off — so proper nouns and jargon are corrected in the pasted text.
         guard AppPreferences.shared.formattingEnabled else {
-            return VocabularyProcessor.applyConfigured(text)
+            return VocabularyProcessor.applyConfigured(input)
         }
 
         do {
             await onWillFormat?()
-            let formatted = try await LLMTextFormatter().format(text)
+            let formatted = try await LLMTextFormatter().format(input)
             return VocabularyProcessor.applyConfigured(formatted)
         } catch {
             print("LLM formatting failed: \(error.localizedDescription)")
-            return VocabularyProcessor.applyConfigured(text)
+            return VocabularyProcessor.applyConfigured(input)
         }
     }
 

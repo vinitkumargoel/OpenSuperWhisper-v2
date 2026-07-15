@@ -21,11 +21,17 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
     var status: RecordingStatus
     var progress: Float
     var sourceFileURL: String?
-    
+    /// Friendly name of the app that was focused when recording started ("Mail").
+    var targetAppName: String?
+    /// Bundle id of that app ("com.apple.mail"), for filtering/icons.
+    var targetAppBundleID: String?
+    /// User favourite flag.
+    var isStarred: Bool = false
+
     var isRegeneration: Bool = false
-    
+
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, fileName, transcription, rawTranscription, duration, status, progress, sourceFileURL
+        case id, timestamp, fileName, transcription, rawTranscription, duration, status, progress, sourceFileURL, targetAppName, targetAppBundleID, isStarred
     }
 
     static func == (lhs: Recording, rhs: Recording) -> Bool {
@@ -34,6 +40,8 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
                lhs.progress == rhs.progress &&
                lhs.transcription == rhs.transcription &&
                lhs.rawTranscription == rhs.rawTranscription &&
+               lhs.isStarred == rhs.isStarred &&
+               lhs.targetAppName == rhs.targetAppName &&
                lhs.isRegeneration == rhs.isRegeneration
     }
 
@@ -70,6 +78,9 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
         static let status = Column(CodingKeys.status)
         static let progress = Column(CodingKeys.progress)
         static let sourceFileURL = Column(CodingKeys.sourceFileURL)
+        static let targetAppName = Column(CodingKeys.targetAppName)
+        static let targetAppBundleID = Column(CodingKeys.targetAppBundleID)
+        static let isStarred = Column(CodingKeys.isStarred)
     }
 }
 
@@ -96,6 +107,7 @@ class RecordingStore: ObservableObject {
             try setupDatabase()
             Task {
                 await repairStoredZeroDurations()
+                await purgeRecordings(olderThanDays: AppPreferences.shared.historyRetentionDays)
             }
         } catch {
             fatalError("Failed to setup database: \(error)")
@@ -146,7 +158,30 @@ class RecordingStore: ObservableObject {
                 }
             }
         }
-        
+
+        migrator.registerMigration("v4_add_target_app") { db in
+            let columnNames = try db.columns(in: Recording.databaseTableName).map { $0.name }
+            if !columnNames.contains("targetAppName") {
+                try db.alter(table: Recording.databaseTableName) { t in
+                    t.add(column: "targetAppName", .text)
+                }
+            }
+            if !columnNames.contains("targetAppBundleID") {
+                try db.alter(table: Recording.databaseTableName) { t in
+                    t.add(column: "targetAppBundleID", .text)
+                }
+            }
+        }
+
+        migrator.registerMigration("v5_add_starred") { db in
+            let columnNames = try db.columns(in: Recording.databaseTableName).map { $0.name }
+            if !columnNames.contains("isStarred") {
+                try db.alter(table: Recording.databaseTableName) { t in
+                    t.add(column: "isStarred", .boolean).notNull().defaults(to: false)
+                }
+            }
+        }
+
         try migrator.migrate(dbQueue)
     }
     
@@ -173,9 +208,13 @@ class RecordingStore: ObservableObject {
         }
     }
 
-    nonisolated func fetchRecordings(limit: Int, offset: Int) async throws -> [Recording] {
+    nonisolated func fetchRecordings(limit: Int, offset: Int, starredOnly: Bool = false) async throws -> [Recording] {
         try await dbQueue.read { db in
-            try Recording
+            var request = Recording.all()
+            if starredOnly {
+                request = request.filter(Recording.Columns.isStarred == true)
+            }
+            return try request
                 .order(Recording.Columns.timestamp.desc)
                 .limit(limit, offset: offset)
                 .fetchAll(db)
@@ -212,7 +251,10 @@ class RecordingStore: ObservableObject {
                         duration: duration,
                         status: recording.status,
                         progress: recording.progress,
-                        sourceFileURL: recording.sourceFileURL
+                        sourceFileURL: recording.sourceFileURL,
+                        targetAppName: recording.targetAppName,
+                        targetAppBundleID: recording.targetAppBundleID,
+                        isStarred: recording.isStarred
                     )
                 }
             }
@@ -525,11 +567,18 @@ class RecordingStore: ObservableObject {
         }
     }
     
-    nonisolated func searchRecordingsAsync(query: String, limit: Int = 100, offset: Int = 0) async -> [Recording] {
+    nonisolated func searchRecordingsAsync(query: String, limit: Int = 100, offset: Int = 0, starredOnly: Bool = false) async -> [Recording] {
         do {
             return try await dbQueue.read { db in
-                try Recording
-                    .filter(Recording.Columns.transcription.like("%\(query)%").collating(.nocase))
+                // Match either the transcription or the target-app name.
+                var request = Recording.filter(
+                    Recording.Columns.transcription.like("%\(query)%").collating(.nocase)
+                    || Recording.Columns.targetAppName.like("%\(query)%").collating(.nocase)
+                )
+                if starredOnly {
+                    request = request.filter(Recording.Columns.isStarred == true)
+                }
+                return try request
                     .order(Recording.Columns.timestamp.desc)
                     .limit(limit, offset: offset)
                     .fetchAll(db)
@@ -537,6 +586,60 @@ class RecordingStore: ObservableObject {
         } catch {
             print("Failed to search recordings: \(error)")
             return []
+        }
+    }
+
+    // MARK: - Favourites
+
+    /// Toggle/set the starred flag for a recording and notify observers.
+    func setStarred(_ id: UUID, _ starred: Bool) {
+        Task {
+            do {
+                _ = try await dbQueue.write { db -> Int in
+                    try Recording
+                        .filter(Recording.Columns.id == id)
+                        .updateAll(db, [Recording.Columns.isStarred.set(to: starred)])
+                }
+                if let index = recordings.firstIndex(where: { $0.id == id }) {
+                    recordings[index].isStarred = starred
+                }
+                NotificationCenter.default.post(name: Self.recordingsDidUpdateNotification, object: nil)
+            } catch {
+                print("Failed to update starred flag: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Retention
+
+    /// Deletes completed recordings (and their audio) older than `days`.
+    /// `days <= 0` means "keep forever" and is a no-op. Starred recordings are
+    /// always kept. Returns the number of recordings purged.
+    @discardableResult
+    func purgeRecordings(olderThanDays days: Int) async -> Int {
+        guard days > 0 else { return 0 }
+        let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date.distantPast
+        do {
+            let expired = try await dbQueue.read { db in
+                try Recording
+                    .filter(Recording.Columns.timestamp < cutoff)
+                    .filter(Recording.Columns.isStarred == false)
+                    .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
+                    .fetchAll(db)
+            }
+            guard !expired.isEmpty else { return 0 }
+            for recording in expired {
+                try? FileManager.default.removeItem(at: recording.url)
+            }
+            let ids = expired.map { $0.id }
+            _ = try await dbQueue.write { db -> Int in
+                try Recording.filter(ids.contains(Recording.Columns.id)).deleteAll(db)
+            }
+            NotificationCenter.default.post(name: Self.recordingsDidUpdateNotification, object: nil)
+            return expired.count
+        } catch {
+            print("Failed to purge old recordings: \(error)")
+            return 0
         }
     }
 }

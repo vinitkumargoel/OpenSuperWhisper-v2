@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import Charts
 import Combine
 import Foundation
 import KeyboardShortcuts
@@ -149,9 +150,38 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
+    @Published var autoPasteEnabled: Bool {
+        didSet {
+            AppPreferences.shared.autoPasteEnabled = autoPasteEnabled
+        }
+    }
+
+    @Published var dictationCommandsEnabled: Bool {
+        didSet {
+            AppPreferences.shared.dictationCommandsEnabled = dictationCommandsEnabled
+        }
+    }
+
+    @Published var historyRetentionDays: Int {
+        didSet {
+            AppPreferences.shared.historyRetentionDays = historyRetentionDays
+            // Apply the new policy immediately rather than only on next launch.
+            let days = historyRetentionDays
+            Task { @MainActor in
+                await RecordingStore.shared.purgeRecordings(olderThanDays: days)
+            }
+        }
+    }
+
     @Published var indicatorPosition: IndicatorPosition {
         didSet {
             AppPreferences.shared.indicatorPosition = indicatorPosition.rawValue
+        }
+    }
+
+    @Published var indicatorStyle: IndicatorStyle {
+        didSet {
+            AppPreferences.shared.indicatorStyle = indicatorStyle.rawValue
         }
     }
 
@@ -303,7 +333,8 @@ class SettingsViewModel: ObservableObject {
 
     @Published var analyticsSnapshot: AnalyticsSnapshot = .empty
     @Published var isLoadingAnalytics: Bool = false
-    
+    @Published var analyticsRange: AnalyticsRange = .month
+
     init() {
         let prefs = AppPreferences.shared
         self.selectedEngine = prefs.selectedEngine
@@ -324,7 +355,11 @@ class SettingsViewModel: ObservableObject {
         self.modifierOnlyHotkey = ModifierKey(rawValue: prefs.modifierOnlyHotkey) ?? .none
         self.holdToRecord = prefs.holdToRecord
         self.addSpaceAfterSentence = prefs.addSpaceAfterSentence
+        self.autoPasteEnabled = prefs.autoPasteEnabled
+        self.dictationCommandsEnabled = prefs.dictationCommandsEnabled
+        self.historyRetentionDays = prefs.historyRetentionDays
         self.indicatorPosition = IndicatorPosition(rawValue: prefs.indicatorPosition) ?? .nearCursor
+        self.indicatorStyle = IndicatorStyle(rawValue: prefs.indicatorStyle) ?? .classic
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.formattingEnabled = prefs.formattingEnabled
         self.llmBaseURL = prefs.llmBaseURL
@@ -945,29 +980,10 @@ struct SettingsView: View {
                     AnalyticsMetricCard(title: "Pace", value: analyticsDecimal(viewModel.analyticsSnapshot.averageWordsPerMinute), detail: "words/min")
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Last 7 Days")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Text("Words / recordings / audio")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-
-                    VStack(spacing: 4) {
-                        ForEach(viewModel.analyticsSnapshot.lastSevenDays) { day in
-                            AnalyticsDayRow(
-                                day: day,
-                                maxWords: max(viewModel.analyticsSnapshot.lastSevenDays.map(\.words).max() ?? 0, 1)
-                            )
-                        }
-                    }
-                }
-                .padding(10)
-                .background(Color(.controlBackgroundColor).opacity(0.25))
-                .cornerRadius(8)
+                AnalyticsActivitySection(
+                    snapshot: viewModel.analyticsSnapshot,
+                    range: $viewModel.analyticsRange
+                )
             }
             .padding(14)
         }
@@ -1641,6 +1657,34 @@ struct SettingsView: View {
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                         }
+
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-paste into focused app")
+                                    .font(.subheadline)
+                                Text("When off — or if Accessibility isn't granted — text is copied to the clipboard instead")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $viewModel.autoPasteEnabled)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                        }
+
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Spoken punctuation commands")
+                                    .font(.subheadline)
+                                Text("Turns words like \u{201C}period\u{201D} and \u{201C}new line\u{201D} into punctuation. Supports: \(DictationCommandProcessor.supportedSummary)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $viewModel.dictationCommandsEnabled)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                        }
                     }
                 }
                 .padding()
@@ -1952,6 +1996,26 @@ struct SettingsView: View {
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                         }
+
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-delete old recordings")
+                                    .font(.subheadline)
+                                Text("Removes completed, non-starred recordings older than the chosen age")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Picker("", selection: $viewModel.historyRetentionDays) {
+                                Text("Never").tag(0)
+                                Text("7 days").tag(7)
+                                Text("30 days").tag(30)
+                                Text("90 days").tag(90)
+                                Text("1 year").tag(365)
+                            }
+                            .labelsHidden()
+                            .frame(width: 120)
+                        }
                     }
                 }
                 .padding()
@@ -1983,6 +2047,30 @@ struct SettingsView: View {
                             .labelsHidden()
                             .pickerStyle(.menu)
                             .frame(width: 180)
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Template")
+                                .font(.subheadline)
+                            Text("Choose how the floating indicator looks")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            LazyVGrid(columns: [
+                                GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)
+                            ], spacing: 10) {
+                                ForEach(IndicatorStyle.allCases) { style in
+                                    IndicatorStylePreview(style: style, isSelected: viewModel.indicatorStyle == style)
+                                        .onTapGesture {
+                                            viewModel.indicatorStyle = style
+                                        }
+                                }
+                            }
+                            .padding(.top, 4)
                         }
                     }
                 }
@@ -2212,57 +2300,119 @@ struct AnalyticsMetricCard: View {
     }
 }
 
-struct AnalyticsDayRow: View {
-    let day: AnalyticsDay
-    let maxWords: Int
+struct AnalyticsActivitySection: View {
+    let snapshot: AnalyticsSnapshot
+    @Binding var range: AnalyticsRange
 
-    private var barFraction: Double {
-        guard maxWords > 0 else { return 0 }
-        return Double(day.words) / Double(maxWords)
+    private var series: [AnalyticsDay] { snapshot.series(for: range) }
+    private var summary: AnalyticsRangeSummary { snapshot.summary(for: range) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Activity")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Picker("", selection: $range) {
+                    ForEach(AnalyticsRange.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 210)
+            }
+
+            AnalyticsActivityChart(series: series, range: range)
+                .frame(height: 150)
+
+            HStack(spacing: 8) {
+                AnalyticsSummaryChip(title: "Words", value: summary.words.formatted(.number), tint: SettingsTheme.accent)
+                AnalyticsSummaryChip(title: "Recordings", value: summary.recordings.formatted(.number), tint: SettingsTheme.accent)
+                AnalyticsSummaryChip(title: "Time Saved", value: TextUtil.formatDuration(summary.estimatedTimeSaved), tint: SettingsTheme.accent)
+                AnalyticsSummaryChip(title: "Active Days", value: "\(summary.activeDays)/\(range.days)", tint: SettingsTheme.accent)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor).opacity(0.25))
+        .cornerRadius(10)
+    }
+}
+
+struct AnalyticsActivityChart: View {
+    let series: [AnalyticsDay]
+    let range: AnalyticsRange
+
+    private var hasData: Bool { series.contains { $0.words > 0 } }
+
+    // Fewer x labels on longer ranges so they don't overlap.
+    private var strideDays: Int {
+        switch range {
+        case .week: return 1
+        case .month: return 5
+        case .quarter: return 15
+        }
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Text(day.date, format: .dateTime.weekday(.abbreviated))
-                    .font(.caption)
-                    .fontWeight(.medium)
-                Text(day.date, format: .dateTime.month(.abbreviated).day())
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+        if !hasData {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.textBackgroundColor).opacity(0.35))
+                .overlay(
+                    Text("No activity in this range yet")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                )
+        } else {
+            Chart(series) { day in
+                BarMark(
+                    x: .value("Date", day.date, unit: .day),
+                    y: .value("Words", day.words)
+                )
+                .foregroundStyle(SettingsTheme.accentGradient)
+                .cornerRadius(range == .quarter ? 1.5 : 3)
             }
-            .frame(width: 66, alignment: .leading)
-
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color(.separatorColor).opacity(0.25))
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.accentColor.opacity(0.8))
-                        .frame(width: day.words == 0 ? 0 : max(4, geometry.size.width * barFraction))
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day, count: strideDays)) { value in
+                    AxisGridLine()
+                    AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                        .font(.system(size: 9))
                 }
             }
-            .frame(height: 6)
-
-            HStack(spacing: 4) {
-                Text("\(day.words.formatted(.number))w")
-                    .font(.caption)
-                    .foregroundColor(.primary)
-                    .frame(width: 54, alignment: .trailing)
-                Text("\(day.recordings)r")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .frame(width: 28, alignment: .trailing)
-                Text(TextUtil.formatDuration(day.duration))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .frame(width: 46, alignment: .trailing)
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisGridLine()
+                    AxisValueLabel()
+                        .font(.system(size: 9))
+                }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color(.textBackgroundColor).opacity(0.35))
-        .cornerRadius(6)
+    }
+}
+
+struct AnalyticsSummaryChip: View {
+    let title: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundColor(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.textBackgroundColor).opacity(0.5))
+        .cornerRadius(8)
     }
 }
 

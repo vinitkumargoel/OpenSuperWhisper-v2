@@ -2,6 +2,7 @@ import Cocoa
 import Combine
 import SwiftUI
 import AVFoundation
+import ApplicationServices
 
 enum RecordingState {
     case idle
@@ -178,7 +179,9 @@ class IndicatorViewModel: ObservableObject {
                             duration: duration,
                             status: .completed,
                             progress: 1.0,
-                            sourceFileURL: nil
+                            sourceFileURL: nil,
+                            targetAppName: FocusUtils.lastFrontmostAppName,
+                            targetAppBundleID: FocusUtils.lastFrontmostBundleID
                         ))
                     }
                     
@@ -207,7 +210,14 @@ class IndicatorViewModel: ObservableObject {
     
     func insertText(_ text: String) {
         let finalText = FinalTextProcessor.applyPastePostProcessing(text)
-        ClipboardUtil.insertText(finalText)
+        // Auto-paste only when the user enabled it AND Accessibility is granted
+        // (the synthesized ⌘V needs it). Otherwise fall back to clipboard-only so
+        // the text is never lost — the user can paste manually.
+        if AppPreferences.shared.autoPasteEnabled && AXIsProcessTrusted() {
+            ClipboardUtil.insertText(finalText)
+        } else {
+            ClipboardUtil.copyToClipboard(finalText)
+        }
     }
     
     private func startRecordingTimer() {
@@ -255,6 +265,7 @@ class IndicatorViewModel: ObservableObject {
 }
 
 struct RecordingIndicator: View {
+    var tint: Color = .red
     @State private var pulsing = false
 
     var body: some View {
@@ -262,15 +273,15 @@ struct RecordingIndicator: View {
             .fill(
                 LinearGradient(
                     colors: [
-                        Color.red.opacity(0.85),
-                        Color.red
+                        tint.opacity(0.85),
+                        tint
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             )
             .frame(width: 9, height: 9)
-            .shadow(color: .red.opacity(0.7), radius: 5)
+            .shadow(color: tint.opacity(0.7), radius: 5)
             .opacity(pulsing ? 0.25 : 1.0)
             .animation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true), value: pulsing)
             .onAppear { pulsing = true }
@@ -280,6 +291,7 @@ struct RecordingIndicator: View {
 /// A small animated bar meter reflecting live microphone input level.
 struct LevelMeter: View {
     @ObservedObject var recorder: AudioRecorder
+    var tint: Color = .red
 
     private let weights: [CGFloat] = [0.5, 0.78, 1.0, 0.78, 0.5]
 
@@ -287,7 +299,7 @@ struct LevelMeter: View {
         HStack(spacing: 2.5) {
             ForEach(weights.indices, id: \.self) { i in
                 Capsule()
-                    .fill(Color.red.opacity(0.85))
+                    .fill(tint.opacity(0.85))
                     .frame(width: 2.5, height: barHeight(weights[i]))
             }
         }
@@ -307,11 +319,7 @@ struct IndicatorWindow: View {
     @ObservedObject var viewModel: IndicatorViewModel
     @Environment(\.colorScheme) private var colorScheme
 
-    private var backgroundColor: Color {
-        colorScheme == .dark
-            ? Color.black.opacity(0.24)
-            : Color.white.opacity(0.24)
-    }
+    private var style: IndicatorStyle { IndicatorStyle.current }
 
     private var hasPartialText: Bool {
         viewModel.state == .decoding && !viewModel.partialText.isEmpty
@@ -319,7 +327,7 @@ struct IndicatorWindow: View {
 
     var body: some View {
 
-        let rect = RoundedRectangle(cornerRadius: 24)
+        let rect = RoundedRectangle(cornerRadius: style.cornerRadius)
 
         VStack(spacing: 12) {
             switch viewModel.state {
@@ -338,7 +346,7 @@ struct IndicatorWindow: View {
                 // The pulsing red dot already signals "recording", so we drop the
                 // word to keep the pill on one line: dot · timer · level meter.
                 HStack(spacing: 8) {
-                    RecordingIndicator()
+                    RecordingIndicator(tint: style.accent)
 
                     Text(viewModel.elapsedString)
                         .font(.system(size: 13, weight: .semibold))
@@ -347,7 +355,7 @@ struct IndicatorWindow: View {
 
                     Spacer(minLength: 6)
 
-                    LevelMeter(recorder: viewModel.recorder)
+                    LevelMeter(recorder: viewModel.recorder, tint: style.accent)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
@@ -401,17 +409,24 @@ struct IndicatorWindow: View {
                 EmptyView()
             }
         }
+        .foregroundColor(style.textColor)
         .padding(.horizontal, 24)
         .padding(.vertical, hasPartialText ? 10 : 0)
         .frame(minHeight: 36)
         .background {
             rect
-                .fill(backgroundColor)
+                .fill(style.fillColor(colorScheme))
                 .background {
-                    rect
-                        .fill(Material.thinMaterial)
+                    if style.usesMaterial {
+                        rect.fill(Material.thinMaterial)
+                    }
                 }
-                .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
+                .overlay {
+                    if let stroke = style.strokeColor {
+                        rect.stroke(stroke, lineWidth: 1.5)
+                    }
+                }
+                .shadow(color: .black.opacity(style.shadowOpacity), radius: 10, x: 0, y: 4)
         }
         .clipShape(rect)
         .frame(width: hasPartialText ? 340 : 200)

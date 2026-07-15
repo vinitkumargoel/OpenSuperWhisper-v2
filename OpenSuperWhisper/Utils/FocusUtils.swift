@@ -20,12 +20,18 @@ class FocusUtils {
     /// frontmost by the time formatting runs. Used for per-app formatting modes.
     private(set) static var lastFrontmostBundleID: String?
 
+    /// Friendly name of the app that was frontmost when recording last started
+    /// ("Mail", "Slack"). Captured alongside the bundle id so it can be stored
+    /// on the recording and shown as a tag.
+    private(set) static var lastFrontmostAppName: String?
+
     /// Snapshots the current frontmost application (ignoring ourselves).
     static func captureFrontmostApp() {
-        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        if let bundleID, bundleID != Bundle.main.bundleIdentifier {
-            lastFrontmostBundleID = bundleID
-        }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let bundleID = app.bundleIdentifier,
+              bundleID != Bundle.main.bundleIdentifier else { return }
+        lastFrontmostBundleID = bundleID
+        lastFrontmostAppName = app.localizedName
     }
 
     static func getCurrentCursorPosition() -> NSPoint {

@@ -27,6 +27,14 @@ final class AppPreferences {
     Rewrite the transcript into clean, grammatically correct, well-formatted text. Remove filler words, repeated false starts, transcription artifacts, timestamps, bracketed annotations, speaker labels, and non-content notes. Preserve the speaker's meaning, names, numbers, language, and intent. Do not summarize, answer questions, add new ideas, or wrap the output in quotes or Markdown. Return only the final cleaned text.
     """
 
+    /// Seeds Whisper's decoder with a well-punctuated, tech-aware sample so the
+    /// output favors correct casing, punctuation and common technical spellings.
+    /// Whisper treats `initialPrompt` as preceding context (a style hint), not an
+    /// instruction — so this is written as a natural, exemplary sentence.
+    static let defaultInitialPrompt = """
+    Here is a clear, well-punctuated transcription with correct capitalization, complete sentences, and natural paragraph breaks. Technical terms, product names, and acronyms such as API, macOS, iOS, GitHub, JSON, URL, SQL, and OpenSuperWhisper are spelled correctly.
+    """
+
     private init() {
         migrateOldPreferences()
     }
@@ -82,7 +90,7 @@ final class AppPreferences {
     @UserDefault(key: "noSpeechThreshold", defaultValue: 0.6)
     var noSpeechThreshold: Double
     
-    @UserDefault(key: "initialPrompt", defaultValue: "")
+    @UserDefault(key: "initialPrompt", defaultValue: AppPreferences.defaultInitialPrompt)
     var initialPrompt: String
     
     @UserDefault(key: "useBeamSearch", defaultValue: false)
@@ -118,9 +126,26 @@ final class AppPreferences {
     @UserDefault(key: "addSpaceAfterSentence", defaultValue: true)
     var addSpaceAfterSentence: Bool
 
+    /// When on, transcribed text is auto-pasted into the focused app; when off
+    /// (or when Accessibility permission is missing) it is left on the clipboard.
+    @UserDefault(key: "autoPasteEnabled", defaultValue: true)
+    var autoPasteEnabled: Bool
+
+    /// Auto-delete completed recordings older than N days. 0 = keep forever.
+    @UserDefault(key: "historyRetentionDays", defaultValue: 0)
+    var historyRetentionDays: Int
+
+    /// Resolve spoken punctuation/formatting commands ("period", "new line").
+    @UserDefault(key: "dictationCommandsEnabled", defaultValue: false)
+    var dictationCommandsEnabled: Bool
+
     // Raw value of IndicatorPosition (see IndicatorWindowManager.swift)
     @UserDefault(key: "indicatorPosition", defaultValue: "nearCursor")
     var indicatorPosition: String
+
+    // Raw value of IndicatorStyle (see IndicatorStyle.swift)
+    @UserDefault(key: "indicatorStyle", defaultValue: "classic")
+    var indicatorStyle: String
 
     // LLM formatting (any OpenAI-compatible endpoint).
     // Key names for the toggle and prompt predate the LLM backend, kept for migration.
