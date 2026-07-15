@@ -373,7 +373,7 @@ struct ContentView: View {
                     // Search bar
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(SettingsTheme.accent)
 
                         TextField("Search in transcriptions", text: $searchText)
                             .textFieldStyle(PlainTextFieldStyle())
@@ -585,7 +585,7 @@ struct ContentView: View {
                                     } label: {
                                         Image(systemName: "square.and.arrow.up")
                                             .font(.title3)
-                                            .foregroundColor(.secondary)
+                                            .foregroundColor(SettingsTheme.accent)
                                             .frame(width: 32, height: 32)
                                             .background(ThemePalette.panelSurface(colorScheme))
                                             .overlay(
@@ -637,7 +637,7 @@ struct ContentView: View {
                                 }) {
                                     Image(systemName: "gear")
                                         .font(.title3)
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(SettingsTheme.accent)
                                         .frame(width: 32, height: 32)
                                         .background(ThemePalette.panelSurface(colorScheme))
                                         .overlay(

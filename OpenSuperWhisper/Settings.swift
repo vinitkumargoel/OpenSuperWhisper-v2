@@ -715,6 +715,24 @@ struct Settings {
     }
 }
 
+enum SettingsTheme {
+    /// Primary brand accent used across the settings UI.
+    static let accent = Color(red: 0.40, green: 0.36, blue: 0.92)
+
+    static let accentGradient = LinearGradient(
+        colors: [
+            Color(red: 0.42, green: 0.40, blue: 0.96),
+            Color(red: 0.58, green: 0.36, blue: 0.92)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    static var sidebarBackground: Color {
+        Color(.controlBackgroundColor).opacity(0.5)
+    }
+}
+
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @ObservedObject private var microphoneService = MicrophoneService.shared
@@ -724,56 +742,33 @@ struct SettingsView: View {
     @State private var previousModelURL: URL?
     private let automaticMicrophoneID = "__automatic__"
     
+    private struct SettingsTabInfo: Identifiable {
+        let id: Int
+        let title: String
+        let icon: String
+    }
+
+    private static let tabs: [SettingsTabInfo] = [
+        .init(id: 0, title: "Shortcuts", icon: "command"),
+        .init(id: 1, title: "Model", icon: "cpu"),
+        .init(id: 2, title: "Transcription", icon: "text.bubble"),
+        .init(id: 3, title: "Formatting", icon: "wand.and.stars"),
+        .init(id: 4, title: "Analytics", icon: "chart.bar.xaxis"),
+        .init(id: 5, title: "Audio", icon: "mic"),
+        .init(id: 6, title: "Advanced", icon: "gear"),
+    ]
+
     var body: some View {
-        TabView(selection: $selectedTab) {
+        HStack(spacing: 0) {
+            settingsSidebar
 
-             // Shortcut Settings
-            shortcutSettings
-                .tabItem {
-                    Label("Shortcuts", systemImage: "command")
-                }
-                .tag(0)
-            // Model Settings
-            modelSettings
-                .tabItem {
-                    Label("Model", systemImage: "cpu")
-                }
-                .tag(1)
-            
-            // Transcription Settings
-            transcriptionSettings
-                .tabItem {
-                    Label("Transcription", systemImage: "text.bubble")
-                }
-                .tag(2)
+            Divider()
 
-            formattingSettings
-                .tabItem {
-                    Label("Formatting", systemImage: "wand.and.stars")
-                }
-                .tag(3)
-
-            analyticsSettings
-                .tabItem {
-                    Label("Analytics", systemImage: "chart.bar.xaxis")
-                }
-                .tag(4)
-
-            audioSettings
-                .tabItem {
-                    Label("Audio", systemImage: "mic")
-                }
-                .tag(5)
-            
-            // Advanced Settings
-            advancedSettings
-                .tabItem {
-                    Label("Advanced", systemImage: "gear")
-                }
-                .tag(6)
-            }
-        .padding()
-        .frame(width: 620)
+            selectedContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(.windowBackgroundColor))
+        }
+        .frame(width: 840, height: 640)
         .background(Color(.windowBackgroundColor))
         .safeAreaInset(edge: .bottom) {
             HStack {
@@ -826,6 +821,78 @@ struct SettingsView: View {
                     TranscriptionService.shared.reloadModel(with: modelPath)
                 }
             }
+        }
+    }
+
+    // MARK: - Sidebar navigation
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(SettingsTheme.accentGradient)
+                Text("Settings")
+                    .font(.system(size: 15, weight: .bold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 14)
+
+            ForEach(Self.tabs) { tab in
+                sidebarRow(tab)
+            }
+
+            Spacer()
+        }
+        .frame(width: 208)
+        .frame(maxHeight: .infinity)
+        .background(SettingsTheme.sidebarBackground)
+    }
+
+    private func sidebarRow(_ tab: SettingsTabInfo) -> some View {
+        let isSelected = selectedTab == tab.id
+        return Button {
+            withAnimation(.easeOut(duration: 0.12)) { selectedTab = tab.id }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.white : SettingsTheme.accent)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(isSelected ? AnyShapeStyle(SettingsTheme.accentGradient) : AnyShapeStyle(SettingsTheme.accent.opacity(0.12)))
+                    )
+
+                Text(tab.title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? SettingsTheme.accent.opacity(0.12) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder
+    private var selectedContent: some View {
+        switch selectedTab {
+        case 0: shortcutSettings
+        case 1: modelSettings
+        case 2: transcriptionSettings
+        case 3: formattingSettings
+        case 4: analyticsSettings
+        case 5: audioSettings
+        default: advancedSettings
         }
     }
 
@@ -1025,7 +1092,7 @@ struct SettingsView: View {
     }
 
     private var formattingSettings: some View {
-        Form {
+        ScrollView {
             VStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("AI Auto Format")
@@ -1217,7 +1284,7 @@ struct SettingsView: View {
                     .font(.subheadline)
                 TextEditor(text: mode.prompt)
                     .font(.system(.body, design: .monospaced))
-                    .frame(height: 130)
+                    .frame(height: 100)
                     .padding(6)
                     .background(Color(.textBackgroundColor))
                     .cornerRadius(8)
@@ -1483,7 +1550,7 @@ struct SettingsView: View {
     }
     
     private var transcriptionSettings: some View {
-        Form {
+        ScrollView {
             VStack(spacing: 20) {
                 // Language Settings
                 VStack(alignment: .leading, spacing: 16) {
@@ -1580,7 +1647,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.controlBackgroundColor).opacity(0.3))
                 .cornerRadius(12)
-                
+
                 // Initial Prompt
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Initial Prompt")
@@ -1647,7 +1714,7 @@ struct SettingsView: View {
             .padding()
         }
     }
-    
+
     private var advancedSettings: some View {
         Form {
             VStack(spacing: 20) {
