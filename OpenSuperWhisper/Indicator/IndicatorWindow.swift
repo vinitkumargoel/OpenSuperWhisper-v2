@@ -335,42 +335,41 @@ struct IndicatorWindow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
             case .recording:
+                // The pulsing red dot already signals "recording", so we drop the
+                // word to keep the pill on one line: dot · timer · level meter.
                 HStack(spacing: 8) {
                     RecordingIndicator()
-                        .frame(width: 24)
 
-                    Text("Recording")
+                    Text(viewModel.elapsedString)
                         .font(.system(size: 13, weight: .semibold))
-
-                    Text("· \(viewModel.elapsedString)")
-                        .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .fixedSize()
 
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 6)
 
                     LevelMeter(recorder: viewModel.recorder)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
             case .decoding:
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .frame(width: 24)
-
-                        Text("Transcribing...")
-                            .font(.system(size: 13, weight: .semibold))
-                    }
+                // Keep it single-line and horizontal: show the tail of the live
+                // transcript (head-truncated) so the pill never grows vertically.
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 20)
 
                     if hasPartialText {
                         Text(viewModel.partialText)
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
-                            .lineLimit(3)
+                            .lineLimit(1)
                             .truncationMode(.head)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("Transcribing...")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer(minLength: 0)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
