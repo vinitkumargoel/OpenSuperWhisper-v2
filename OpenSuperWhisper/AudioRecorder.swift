@@ -10,8 +10,11 @@ class AudioRecorder: NSObject, ObservableObject {
     @Published var currentlyPlayingURL: URL?
     @Published var canRecord = false
     @Published var isConnecting = false
-    
+    /// Normalized microphone input level (0…1) while recording, for the UI meter.
+    @Published var level: Float = 0
+
     private var audioRecorder: AVAudioRecorder?
+    private var meteringTimer: DispatchSourceTimer?
     private var audioPlayer: AVAudioPlayer?
     private var notificationSound: NSSound?
     private let temporaryDirectory: URL
@@ -21,6 +24,10 @@ class AudioRecorder: NSObject, ObservableObject {
     private var connectionCheckTimer: DispatchSourceTimer?
     private var recordingDeviceID: AudioDeviceID?
     private let mediaController: SystemMediaController
+    // Guards audioRecorder/currentRecordingURL/connectionCheckTimer/recordingDeviceID,
+    // which are touched from the main thread, detached start tasks, and the
+    // connection-monitoring timer on a global queue.
+    private let stateLock = NSRecursiveLock()
 
     // MARK: - Singleton Instance
 
@@ -107,11 +114,14 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     func startRecording() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         guard canRecord else {
             print("Cannot start recording - no audio input available")
             return
         }
-        
+
         if isRecording || isConnecting {
             print("stop recording while recording")
             _ = stopRecording()
@@ -147,6 +157,9 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     private func startRecordingWithRecorder(fileURL: URL, monitorConnection: Bool) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         var channelCount = 1
         if let activeMic = MicrophoneService.shared.getActiveMicrophone() {
             channelCount = MicrophoneService.shared.getInputChannelCount(for: activeMic)
@@ -164,8 +177,9 @@ class AudioRecorder: NSObject, ObservableObject {
         do {
             audioRecorder = try AVAudioRecorder(url: fileURL, settings: settings)
             audioRecorder?.delegate = self
-            audioRecorder?.isMeteringEnabled = monitorConnection
+            audioRecorder?.isMeteringEnabled = true
             audioRecorder?.record()
+            startMetering()
             if monitorConnection {
                 startConnectionMonitoring()
             } else {
@@ -181,11 +195,15 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     func stopRecording() -> URL? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         audioRecorder?.stop()
         mediaController.recordingDidStop()
         updateRecordingState(isRecording: false, isConnecting: false)
         stopConnectionMonitoring()
-        
+        stopMetering()
+
         if let url = currentRecordingURL,
            let duration = try? AVAudioPlayer(contentsOf: url).duration,
            duration < 1.0
@@ -201,15 +219,58 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     func cancelRecording() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         audioRecorder?.stop()
         mediaController.recordingDidStop()
         updateRecordingState(isRecording: false, isConnecting: false)
         stopConnectionMonitoring()
-        
+        stopMetering()
+
         if let url = currentRecordingURL {
             try? FileManager.default.removeItem(at: url)
         }
         currentRecordingURL = nil
+    }
+
+    // MARK: - Input Level Metering
+
+    private func startMetering() {
+        stopMetering()
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+
+            self.stateLock.lock()
+            let recorder = self.audioRecorder
+            self.stateLock.unlock()
+
+            guard let recorder = recorder, recorder.isRecording else { return }
+            recorder.updateMeters()
+            let power = recorder.averagePower(forChannel: 0)
+            self.level = Self.normalizedPower(power)
+        }
+        meteringTimer = timer
+        timer.resume()
+    }
+
+    private func stopMetering() {
+        meteringTimer?.cancel()
+        meteringTimer = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.level = 0
+        }
+    }
+
+    /// Maps an average-power reading in dBFS to a 0…1 meter value.
+    private static func normalizedPower(_ db: Float) -> Float {
+        let floorDb: Float = -55
+        if db < floorDb { return 0 }
+        if db >= 0 { return 1 }
+        return (db - floorDb) / (0 - floorDb)
     }
     
     
@@ -258,23 +319,33 @@ class AudioRecorder: NSObject, ObservableObject {
     }
     
     private func startConnectionMonitoring() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         stopConnectionMonitoring()
-        
+
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
         timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
         let initialFileSize: Int64 = 4096
         var growthCount = 0
-        
+
         timer.setEventHandler { [weak self] in
-            guard let self = self, let _ = self.audioRecorder, let url = self.currentRecordingURL else { return }
-            
+            guard let self = self else { return }
+
+            self.stateLock.lock()
+            guard self.audioRecorder != nil, let url = self.currentRecordingURL else {
+                self.stateLock.unlock()
+                return
+            }
+            self.stateLock.unlock()
+
             let currentFileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
             let totalGrowth = currentFileSize - initialFileSize
-            
+
             if totalGrowth > 8000 {
                 growthCount += 1
             }
-            
+
             if growthCount >= 2 {
                 self.stopConnectionMonitoring()
                 self.updateRecordingState(isRecording: true, isConnecting: false)
@@ -283,8 +354,11 @@ class AudioRecorder: NSObject, ObservableObject {
         connectionCheckTimer = timer
         timer.resume()
     }
-    
+
     private func stopConnectionMonitoring() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
         connectionCheckTimer?.cancel()
         connectionCheckTimer = nil
     }
@@ -293,7 +367,9 @@ class AudioRecorder: NSObject, ObservableObject {
 extension AudioRecorder: AVAudioRecorderDelegate {
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         if !flag {
+            stateLock.lock()
             currentRecordingURL = nil
+            stateLock.unlock()
         }
     }
 }

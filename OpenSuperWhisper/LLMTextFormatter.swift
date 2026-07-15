@@ -28,15 +28,20 @@ enum LLMTextFormatterError: LocalizedError {
 struct LLMTextFormatter {
     private let timeout: TimeInterval = 60
 
-    func format(_ text: String) async throws -> String {
+    func format(_ text: String, modelOverride: String? = nil) async throws -> String {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return text }
 
         let prefs = AppPreferences.shared
         let baseURL = Self.normalizedBaseURL(prefs.llmBaseURL)
         let apiKey = prefs.llmApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = prefs.llmModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let instruction = prefs.formattingPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let override = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let model = override.isEmpty
+            ? prefs.llmModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            : override
+        // Resolve the active formatting mode's prompt (falls back to the
+        // legacy single prompt when no modes are configured).
+        let instruction = prefs.resolveFormattingPrompt().trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard let url = URL(string: baseURL + "/chat/completions") else {
             throw LLMTextFormatterError.invalidURL
@@ -140,16 +145,19 @@ struct LLMTextFormatter {
 
 enum FinalTextProcessor {
     static func formatIfNeeded(_ text: String, onWillFormat: (() async -> Void)? = nil) async -> String {
+        // Custom-vocabulary substitutions always apply — even with AI formatting
+        // off — so proper nouns and jargon are corrected in the pasted text.
         guard AppPreferences.shared.formattingEnabled else {
-            return text
+            return VocabularyProcessor.applyConfigured(text)
         }
 
         do {
             await onWillFormat?()
-            return try await LLMTextFormatter().format(text)
+            let formatted = try await LLMTextFormatter().format(text)
+            return VocabularyProcessor.applyConfigured(formatted)
         } catch {
             print("LLM formatting failed: \(error.localizedDescription)")
-            return text
+            return VocabularyProcessor.applyConfigured(text)
         }
     }
 

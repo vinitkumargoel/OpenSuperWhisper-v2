@@ -14,7 +14,20 @@ import KeyboardShortcuts
 import SwiftUI
 
 class FocusUtils {
-    
+
+    /// Bundle ID of the app that was frontmost when recording last started.
+    /// Captured at record time because our own indicator/menu-bar may become
+    /// frontmost by the time formatting runs. Used for per-app formatting modes.
+    private(set) static var lastFrontmostBundleID: String?
+
+    /// Snapshots the current frontmost application (ignoring ourselves).
+    static func captureFrontmostApp() {
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if let bundleID, bundleID != Bundle.main.bundleIdentifier {
+            lastFrontmostBundleID = bundleID
+        }
+    }
+
     static func getCurrentCursorPosition() -> NSPoint {
         return NSEvent.mouseLocation
     }
@@ -39,7 +52,13 @@ class FocusUtils {
             print("Не удалось получить фокусированный элемент (CFTypeRef is nil)") // Extra safety check, though unlikely
             return nil
         }
-        
+
+        // Apps with broken accessibility implementations can return a value of
+        // the wrong CF type here — never force-cast what another process handed us.
+        guard CFGetTypeID(focusedElementCF) == AXUIElementGetTypeID() else {
+            print("Focused element is not an AXUIElement")
+            return nil
+        }
         let element = focusedElementCF as! AXUIElement
         // Получаем выделенный текстовый диапазон у фокусированного элемента
         var selectedTextRange: AnyObject?
@@ -65,8 +84,12 @@ class FocusUtils {
             print("Не удалось получить границы каретки")
             return nil
         }
-        
-        let rect = caretBounds as! AXValue
+
+        guard let caretBoundsCF = caretBounds, CFGetTypeID(caretBoundsCF) == AXValueGetTypeID() else {
+            print("Caret bounds is not an AXValue")
+            return nil
+        }
+        let rect = caretBoundsCF as! AXValue
         
         return rect.toCGRect()
     }
@@ -105,7 +128,11 @@ class FocusUtils {
             print("Не удалось получить сфокусированное окно")
             return NSScreen.main
         }
-        let windowElement = focusedWindow as! AXUIElement
+        guard let focusedWindowCF = focusedWindow, CFGetTypeID(focusedWindowCF as CFTypeRef) == AXUIElementGetTypeID() else {
+            print("Focused window is not an AXUIElement")
+            return NSScreen.main
+        }
+        let windowElement = focusedWindowCF as! AXUIElement
         
         var windowFrameValue: CFTypeRef?
         let frameResult = AXUIElementCopyAttributeValue(windowElement,
@@ -117,7 +144,11 @@ class FocusUtils {
             print("Не удалось получить фрейм окна")
             return NSScreen.main
         }
-        let frameValue = windowFrameValue as! AXValue
+        guard let windowFrameCF = windowFrameValue, CFGetTypeID(windowFrameCF) == AXValueGetTypeID() else {
+            print("Window frame is not an AXValue")
+            return NSScreen.main
+        }
+        let frameValue = windowFrameCF as! AXValue
         
         var windowFrame = CGRect.zero
         guard AXValueGetValue(frameValue, AXValueType.cgRect, &windowFrame) else {

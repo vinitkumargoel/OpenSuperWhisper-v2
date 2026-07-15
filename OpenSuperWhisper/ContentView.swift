@@ -157,6 +157,8 @@ class ContentViewModel: ObservableObject {
     }
     
     func startRecording() {
+        // Remember which app the user is dictating into, for per-app modes.
+        FocusUtils.captureFrontmostApp()
         if microphoneService.isActiveMicrophoneRequiresConnection() {
             state = .connecting
             stopBlinking()
@@ -318,6 +320,27 @@ struct ContentView: View {
         return ""
     }
     
+    private func exportRecordings(format: TranscriptExportFormat) {
+        Task {
+            let recordings = await RecordingStore.shared.fetchAllForExport()
+            let content = TranscriptExporter.serialize(recordings, format: format)
+            await MainActor.run {
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [format.contentType]
+                panel.nameFieldStringValue = "transcriptions.\(format.fileExtension)"
+                panel.canCreateDirectories = true
+                panel.title = "Export Transcriptions"
+                if panel.runModal() == .OK, let url = panel.url {
+                    do {
+                        try content.write(to: url, atomically: true, encoding: .utf8)
+                    } catch {
+                        print("Failed to export transcriptions: \(error)")
+                    }
+                }
+            }
+        }
+    }
+
     private func performSearch(_ query: String) {
         searchTask?.cancel()
         
@@ -551,7 +574,32 @@ struct ContentView: View {
 
                             HStack(spacing: 12) {
                                 MicrophonePickerIconView(microphoneService: viewModel.microphoneService)
-                                
+
+                                if !viewModel.recordings.isEmpty {
+                                    Menu {
+                                        ForEach(TranscriptExportFormat.allCases) { format in
+                                            Button(format.displayName) {
+                                                exportRecordings(format: format)
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "square.and.arrow.up")
+                                            .font(.title3)
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 32, height: 32)
+                                            .background(ThemePalette.panelSurface(colorScheme))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .stroke(ThemePalette.panelBorder(colorScheme), lineWidth: 1)
+                                            )
+                                            .cornerRadius(8)
+                                    }
+                                    .menuStyle(.borderlessButton)
+                                    .menuIndicator(.hidden)
+                                    .fixedSize()
+                                    .help("Export all transcriptions")
+                                }
+
                                 if !viewModel.recordings.isEmpty {
                                     Button(action: {
                                         showDeleteConfirmation = true
@@ -744,12 +792,20 @@ struct RecordingRow: View {
     @State private var showTranscription = false
     @State private var showRawTranscription = false
     @State private var isHovered = false
+    @State private var showReformatPopover = false
+    @State private var showReformatError = false
+    @State private var reformatErrorMessage = ""
     @Environment(\.colorScheme) private var colorScheme
 
     private var isPlaying: Bool {
         audioRecorder.isPlaying && audioRecorder.currentlyPlayingURL == recording.url
     }
-    
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     private var isPending: Bool {
         recording.status == .pending || recording.status == .converting || recording.status == .transcribing || recording.status == .formatting
     }
@@ -997,6 +1053,31 @@ struct RecordingRow: View {
                         .transition(.opacity)
                     }
 
+                    if recording.status == .completed && (isHovered || showReformatPopover) && !recording.transcription.isEmpty {
+                        Button(action: {
+                            showReformatPopover = true
+                        }) {
+                            Image(systemName: "wand.and.stars")
+                                .font(.system(size: 18))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Reformat with AI (re-runs formatting only, no re-transcription)")
+                        .transition(.opacity)
+                        .popover(isPresented: $showReformatPopover, arrowEdge: .bottom) {
+                            ReformatPopover { model in
+                                Task {
+                                    do {
+                                        try await TranscriptionQueue.shared.reformatRecording(recording, model: model)
+                                    } catch {
+                                        reformatErrorMessage = error.localizedDescription
+                                        showReformatError = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (recording.status == .completed || recording.status == .failed) && isHovered {
                         Button(action: {
                             onRegenerate()
@@ -1006,7 +1087,7 @@ struct RecordingRow: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Regenerate transcription")
+                        .help("Regenerate transcription (full re-transcription)")
                         .transition(.opacity)
                     }
 
@@ -1043,7 +1124,131 @@ struct RecordingRow: View {
         .onHover { hovering in
             isHovered = hovering
         }
+        .contextMenu {
+            if !recording.transcription.isEmpty {
+                Button {
+                    copyToPasteboard(recording.transcription)
+                } label: {
+                    Label("Copy Text", systemImage: "doc.on.doc")
+                }
+            }
+            if let raw = recording.rawTranscription, !raw.isEmpty, raw != recording.transcription {
+                Button {
+                    copyToPasteboard(raw)
+                } label: {
+                    Label("Copy Raw Transcript", systemImage: "doc.plaintext")
+                }
+            }
+            if !isPending {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([recording.url])
+                } label: {
+                    Label("Reveal Audio in Finder", systemImage: "folder")
+                }
+            }
+            if recording.status == .completed || recording.status == .failed {
+                Divider()
+                Button {
+                    onRegenerate()
+                } label: {
+                    Label("Regenerate", systemImage: "arrow.clockwise")
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                if isPlaying { audioRecorder.stopPlaying() }
+                onDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
         .padding(.vertical, 4)
+        .alert("Reformatting Failed", isPresented: $showReformatError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(reformatErrorMessage)
+        }
+    }
+}
+
+struct ReformatPopover: View {
+    /// Called with the chosen model id (may equal the settings default).
+    let onReformat: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var model: String = AppPreferences.shared.llmModel
+    @State private var availableModels: [String] = []
+    @State private var isFetching = false
+    @State private var fetchError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Reformat with AI")
+                .font(.headline)
+
+            Text("Re-runs LLM formatting on the saved raw transcript. The audio is not re-transcribed.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                TextField("Model id", text: $model)
+                    .textFieldStyle(.roundedBorder)
+
+                if !availableModels.isEmpty {
+                    Picker("", selection: $model) {
+                        ForEach(availableModels, id: \.self) { modelId in
+                            Text(modelId).tag(modelId)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 130)
+                }
+
+                Button(isFetching ? "..." : "Fetch") {
+                    fetchModels()
+                }
+                .disabled(isFetching)
+                .controlSize(.small)
+                .help("List models from the configured endpoint")
+            }
+
+            if let fetchError {
+                Text(fetchError)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("Reformat") {
+                    dismiss()
+                    onReformat(model)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding(12)
+        .frame(width: 340)
+    }
+
+    private func fetchModels() {
+        isFetching = true
+        fetchError = nil
+        Task { @MainActor in
+            defer { isFetching = false }
+            do {
+                availableModels = try await LLMTextFormatter.fetchAvailableModels(
+                    baseURL: AppPreferences.shared.llmBaseURL,
+                    apiKey: AppPreferences.shared.llmApiKey
+                )
+            } catch {
+                fetchError = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -24,6 +24,10 @@ class IndicatorViewModel: ObservableObject {
     @Published var elapsed: TimeInterval = 0
     @Published var recorder: AudioRecorder = .shared
     @Published var isVisible = false
+    @Published var partialText: String = ""
+
+    /// Where the pill anchors inside the transparent panel (set by IndicatorWindowManager).
+    var contentAlignment: Alignment = .bottom
 
     var delegate: IndicatorViewDelegate?
     private var recordingTimer: Timer?
@@ -61,6 +65,15 @@ class IndicatorViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Live partial transcript: whisper streams decoded segments while transcribing
+        transcriptionService.$currentSegment
+            .receive(on: RunLoop.main)
+            .sink { [weak self] text in
+                guard let self = self, self.state == .decoding else { return }
+                self.partialText = text
+            }
+            .store(in: &cancellables)
     }
     
     var isTranscriptionBusy: Bool {
@@ -88,7 +101,10 @@ class IndicatorViewModel: ObservableObject {
             showBusyMessage()
             return
         }
-        
+
+        // Remember which app the user is dictating into, for per-app modes.
+        FocusUtils.captureFrontmostApp()
+
         if MicrophoneService.shared.isActiveMicrophoneRequiresConnection() {
             state = .connecting
             stopRecordingTimer()
@@ -110,7 +126,8 @@ class IndicatorViewModel: ObservableObject {
             showBusyMessage()
             return
         }
-        
+
+        partialText = ""
         state = .decoding
         
         if let tempURL = recorder.stopRecording() {
@@ -260,20 +277,50 @@ struct RecordingIndicator: View {
     }
 }
 
+/// A small animated bar meter reflecting live microphone input level.
+struct LevelMeter: View {
+    @ObservedObject var recorder: AudioRecorder
+
+    private let weights: [CGFloat] = [0.5, 0.78, 1.0, 0.78, 0.5]
+
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(weights.indices, id: \.self) { i in
+                Capsule()
+                    .fill(Color.red.opacity(0.85))
+                    .frame(width: 2.5, height: barHeight(weights[i]))
+            }
+        }
+        .frame(height: 16)
+        .animation(.easeOut(duration: 0.08), value: recorder.level)
+    }
+
+    private func barHeight(_ weight: CGFloat) -> CGFloat {
+        let level = CGFloat(max(0, min(1, recorder.level)))
+        let minH: CGFloat = 3
+        let maxH: CGFloat = 16
+        return minH + (maxH - minH) * level * weight
+    }
+}
+
 struct IndicatorWindow: View {
     @ObservedObject var viewModel: IndicatorViewModel
     @Environment(\.colorScheme) private var colorScheme
-    
+
     private var backgroundColor: Color {
         colorScheme == .dark
             ? Color.black.opacity(0.24)
             : Color.white.opacity(0.24)
     }
-    
+
+    private var hasPartialText: Bool {
+        viewModel.state == .decoding && !viewModel.partialText.isEmpty
+    }
+
     var body: some View {
 
         let rect = RoundedRectangle(cornerRadius: 24)
-        
+
         VStack(spacing: 12) {
             switch viewModel.state {
             case .connecting:
@@ -299,17 +346,32 @@ struct IndicatorWindow: View {
                         .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 8)
+
+                    LevelMeter(recorder: viewModel.recorder)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
             case .decoding:
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 24)
-                    
-                    Text("Transcribing...")
-                        .font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 24)
+
+                        Text("Transcribing...")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+
+                    if hasPartialText {
+                        Text(viewModel.partialText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .truncationMode(.head)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -341,7 +403,8 @@ struct IndicatorWindow: View {
             }
         }
         .padding(.horizontal, 24)
-        .frame(height: 36)
+        .padding(.vertical, hasPartialText ? 10 : 0)
+        .frame(minHeight: 36)
         .background {
             rect
                 .fill(backgroundColor)
@@ -352,11 +415,13 @@ struct IndicatorWindow: View {
                 .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
         }
         .clipShape(rect)
-        .frame(width: 200)
+        .frame(width: hasPartialText ? 340 : 200)
         .scaleEffect(viewModel.isVisible ? 1 : 0.5)
         .offset(y: viewModel.isVisible ? 0 : 20)
         .opacity(viewModel.isVisible ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewModel.isVisible)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPartialText)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: viewModel.contentAlignment)
         .onAppear {
             viewModel.isVisible = true
         }

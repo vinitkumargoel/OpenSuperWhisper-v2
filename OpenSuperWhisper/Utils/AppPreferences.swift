@@ -118,6 +118,10 @@ final class AppPreferences {
     @UserDefault(key: "addSpaceAfterSentence", defaultValue: true)
     var addSpaceAfterSentence: Bool
 
+    // Raw value of IndicatorPosition (see IndicatorWindowManager.swift)
+    @UserDefault(key: "indicatorPosition", defaultValue: "nearCursor")
+    var indicatorPosition: String
+
     // LLM formatting (any OpenAI-compatible endpoint).
     // Key names for the toggle and prompt predate the LLM backend, kept for migration.
     @UserDefault(key: "codexFormattingEnabled", defaultValue: false)
@@ -134,4 +138,63 @@ final class AppPreferences {
 
     @UserDefault(key: "codexFormattingPrompt", defaultValue: AppPreferences.defaultFormattingPrompt)
     var formattingPrompt: String
+
+    // MARK: - Custom Vocabulary (word replacements)
+
+    @UserDefault(key: "vocabularyRulesData", defaultValue: Data())
+    private var vocabularyRulesData: Data
+
+    /// User-defined spoken→written substitutions applied after transcription.
+    var vocabularyRules: [VocabularyRule] {
+        get {
+            guard !vocabularyRulesData.isEmpty,
+                  let decoded = try? JSONDecoder().decode([VocabularyRule].self, from: vocabularyRulesData) else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            vocabularyRulesData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    // MARK: - Formatting Modes (prompt presets)
+
+    @UserDefault(key: "formattingModesData", defaultValue: Data())
+    private var formattingModesData: Data
+
+    /// Named formatting presets. Seeded from the legacy single prompt on first use.
+    var formattingModes: [FormattingMode] {
+        get {
+            guard !formattingModesData.isEmpty,
+                  let decoded = try? JSONDecoder().decode([FormattingMode].self, from: formattingModesData) else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            formattingModesData = (try? JSONEncoder().encode(newValue)) ?? Data()
+        }
+    }
+
+    /// UUID string of the manually-selected active mode.
+    @UserDefault(key: "activeFormattingModeID", defaultValue: "")
+    var activeFormattingModeID: String
+
+    /// When on, the mode auto-switches based on the app that was frontmost
+    /// when recording started (via matching app bundle IDs).
+    @UserDefault(key: "autoSwitchFormattingMode", defaultValue: false)
+    var autoSwitchFormattingMode: Bool
+
+    /// Ensures at least one mode exists, migrating the legacy single prompt.
+    func ensureDefaultFormattingMode() {
+        guard formattingModes.isEmpty else { return }
+        let existing = formattingPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let seed = FormattingMode(
+            name: "General",
+            prompt: existing.isEmpty ? AppPreferences.defaultFormattingPrompt : existing
+        )
+        formattingModes = [seed]
+        activeFormattingModeID = seed.id.uuidString
+    }
 }

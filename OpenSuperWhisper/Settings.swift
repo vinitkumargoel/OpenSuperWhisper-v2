@@ -3,6 +3,7 @@ import Carbon
 import Combine
 import Foundation
 import KeyboardShortcuts
+import ServiceManagement
 import SwiftUI
 import FluidAudio
 
@@ -148,6 +149,32 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
+    @Published var indicatorPosition: IndicatorPosition {
+        didSet {
+            AppPreferences.shared.indicatorPosition = indicatorPosition.rawValue
+        }
+    }
+
+    private var isRevertingLaunchAtLogin = false
+
+    @Published var launchAtLogin: Bool {
+        didSet {
+            guard !isRevertingLaunchAtLogin, oldValue != launchAtLogin else { return }
+            do {
+                if launchAtLogin {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("Failed to update launch at login: \(error)")
+                isRevertingLaunchAtLogin = true
+                launchAtLogin = oldValue
+                isRevertingLaunchAtLogin = false
+            }
+        }
+    }
+
     @Published var formattingEnabled: Bool {
         didSet {
             AppPreferences.shared.formattingEnabled = formattingEnabled
@@ -178,6 +205,33 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
+    @Published var vocabularyRules: [VocabularyRule] {
+        didSet {
+            AppPreferences.shared.vocabularyRules = vocabularyRules
+        }
+    }
+
+    @Published var formattingModes: [FormattingMode] {
+        didSet {
+            AppPreferences.shared.formattingModes = formattingModes
+        }
+    }
+
+    @Published var activeFormattingModeID: String {
+        didSet {
+            AppPreferences.shared.activeFormattingModeID = activeFormattingModeID
+        }
+    }
+
+    @Published var autoSwitchFormattingMode: Bool {
+        didSet {
+            AppPreferences.shared.autoSwitchFormattingMode = autoSwitchFormattingMode
+        }
+    }
+
+    /// UI-only: which mode is currently open in the editor.
+    @Published var editingModeID: String = ""
+
     @Published var availableLLMModels: [String] = []
     @Published var isFetchingLLMModels: Bool = false
     @Published var llmModelsFetchError: String?
@@ -197,6 +251,54 @@ class SettingsViewModel: ObservableObject {
                 llmModelsFetchError = error.localizedDescription
             }
         }
+    }
+
+    // MARK: - Vocabulary & Modes editing
+
+    func addVocabularyRule() {
+        vocabularyRules.append(VocabularyRule())
+    }
+
+    func deleteVocabularyRule(_ id: UUID) {
+        vocabularyRules.removeAll { $0.id == id }
+    }
+
+    func addFormattingMode() {
+        let mode = FormattingMode(name: "New Mode", prompt: AppPreferences.defaultFormattingPrompt)
+        formattingModes.append(mode)
+        editingModeID = mode.id.uuidString
+        if activeFormattingModeID.isEmpty {
+            activeFormattingModeID = mode.id.uuidString
+        }
+    }
+
+    func deleteFormattingMode(_ id: String) {
+        formattingModes.removeAll { $0.id.uuidString == id }
+        if activeFormattingModeID == id {
+            activeFormattingModeID = formattingModes.first?.id.uuidString ?? ""
+        }
+        if editingModeID == id {
+            editingModeID = formattingModes.first?.id.uuidString ?? ""
+        }
+    }
+
+    /// Two-way binding to a field of the mode currently open in the editor.
+    func editingModeBinding() -> Binding<FormattingMode>? {
+        guard let idx = formattingModes.firstIndex(where: { $0.id.uuidString == editingModeID }) else {
+            return nil
+        }
+        return Binding(
+            get: { [weak self] in
+                guard let self, self.formattingModes.indices.contains(idx) else {
+                    return FormattingMode(name: "", prompt: "")
+                }
+                return self.formattingModes[idx]
+            },
+            set: { [weak self] newValue in
+                guard let self, self.formattingModes.indices.contains(idx) else { return }
+                self.formattingModes[idx] = newValue
+            }
+        )
     }
 
     @Published var analyticsSnapshot: AnalyticsSnapshot = .empty
@@ -222,12 +324,20 @@ class SettingsViewModel: ObservableObject {
         self.modifierOnlyHotkey = ModifierKey(rawValue: prefs.modifierOnlyHotkey) ?? .none
         self.holdToRecord = prefs.holdToRecord
         self.addSpaceAfterSentence = prefs.addSpaceAfterSentence
+        self.indicatorPosition = IndicatorPosition(rawValue: prefs.indicatorPosition) ?? .nearCursor
+        self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.formattingEnabled = prefs.formattingEnabled
         self.llmBaseURL = prefs.llmBaseURL
         self.llmApiKey = prefs.llmApiKey
         self.llmModel = prefs.llmModel
         self.formattingPrompt = prefs.formattingPrompt
-        
+        prefs.ensureDefaultFormattingMode()
+        self.vocabularyRules = prefs.vocabularyRules
+        self.formattingModes = prefs.formattingModes
+        self.activeFormattingModeID = prefs.activeFormattingModeID
+        self.autoSwitchFormattingMode = prefs.autoSwitchFormattingMode
+        self.editingModeID = prefs.activeFormattingModeID
+
         if let savedPath = prefs.selectedWhisperModelPath ?? prefs.selectedModelPath {
             self.selectedModelURL = URL(fileURLWithPath: savedPath)
         }
@@ -1004,35 +1114,202 @@ struct SettingsView: View {
                 .background(Color(.controlBackgroundColor).opacity(0.3))
                 .cornerRadius(12)
 
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("System Prompt")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                formattingModesSection
 
-                    TextEditor(text: $viewModel.formattingPrompt)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(height: 150)
-                        .padding(6)
-                        .background(Color(.textBackgroundColor))
-                        .cornerRadius(8)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                        )
-
-                    Button("Restore Default Prompt") {
-                        viewModel.formattingPrompt = AppPreferences.defaultFormattingPrompt
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.controlBackgroundColor).opacity(0.3))
-                .cornerRadius(12)
+                vocabularySection
             }
             .padding()
         }
+    }
+
+    private var formattingModesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Formatting Modes")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Spacer()
+                Button {
+                    viewModel.addFormattingMode()
+                } label: {
+                    Label("Add Mode", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+
+            Text("Presets with their own prompt. Optionally auto-select a mode based on the app you're dictating into.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Auto-switch by active app")
+                        .font(.subheadline)
+                    Text("Uses the mode whose app list matches the app that was frontmost when recording started. Otherwise the active mode below is used.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $viewModel.autoSwitchFormattingMode)
+                    .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                    .labelsHidden()
+            }
+
+            HStack(spacing: 8) {
+                Text("Active mode")
+                    .font(.subheadline)
+                Picker("", selection: $viewModel.activeFormattingModeID) {
+                    ForEach(viewModel.formattingModes) { mode in
+                        Text(mode.name.isEmpty ? "Untitled" : mode.name).tag(mode.id.uuidString)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 220)
+            }
+
+            // Mode being edited
+            Picker("Editing", selection: $viewModel.editingModeID) {
+                ForEach(viewModel.formattingModes) { mode in
+                    Text(mode.name.isEmpty ? "Untitled" : mode.name).tag(mode.id.uuidString)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if let modeBinding = viewModel.editingModeBinding() {
+                modeEditor(modeBinding)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.controlBackgroundColor).opacity(0.3))
+        .cornerRadius(12)
+    }
+
+    private func modeEditor(_ mode: Binding<FormattingMode>) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name")
+                    .font(.subheadline)
+                TextField("Mode name", text: mode.name)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Auto-activate for apps")
+                    .font(.subheadline)
+                TextField("com.apple.mail, com.tinyspeck.slackmacgap", text: Binding(
+                    get: { mode.wrappedValue.appBundleIDs.joined(separator: ", ") },
+                    set: { newValue in
+                        mode.wrappedValue.appBundleIDs = newValue
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+                Text("Comma-separated app bundle IDs. Used only when auto-switch is on.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prompt")
+                    .font(.subheadline)
+                TextEditor(text: mode.prompt)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(height: 130)
+                    .padding(6)
+                    .background(Color(.textBackgroundColor))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            }
+
+            HStack {
+                Button("Restore Default Prompt") {
+                    mode.wrappedValue.prompt = AppPreferences.defaultFormattingPrompt
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+
+                Spacer()
+
+                Button(role: .destructive) {
+                    viewModel.deleteFormattingMode(mode.wrappedValue.id.uuidString)
+                } label: {
+                    Label("Delete Mode", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .disabled(viewModel.formattingModes.count <= 1)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var vocabularySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Custom Vocabulary")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Spacer()
+                Button {
+                    viewModel.addVocabularyRule()
+                } label: {
+                    Label("Add Word", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+
+            Text("Fix names, jargon, and acronyms the model mishears. Applied after transcription — even when AI formatting is off.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if viewModel.vocabularyRules.isEmpty {
+                Text("No replacements yet. Add one to correct terms like \"clod code\" → \"Claude Code\".")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            } else {
+                HStack(spacing: 8) {
+                    Text("Heard").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Replace with").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Aa").font(.caption).foregroundColor(.secondary).frame(width: 30)
+                    Spacer().frame(width: 24)
+                }
+
+                ForEach($viewModel.vocabularyRules) { $rule in
+                    HStack(spacing: 8) {
+                        TextField("clod code", text: $rule.from)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                        TextField("Claude Code", text: $rule.to)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                        Toggle("", isOn: $rule.caseSensitive)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                            .frame(width: 30)
+                            .help("Case-sensitive match")
+                        Button {
+                            viewModel.deleteVocabularyRule(rule.id)
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: 24)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.controlBackgroundColor).opacity(0.3))
+        .cornerRadius(12)
     }
     
     private var modelSettings: some View {
@@ -1593,6 +1870,52 @@ struct SettingsView: View {
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                                 .help("Set system output volume to 0 when recording starts and restore it when recording stops")
+                        }
+
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Launch at Login")
+                                    .font(.subheadline)
+                                Text("Start OpenSuperWhisper automatically when you log in")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $viewModel.launchAtLogin)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(12)
+
+                // Recording Indicator
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Recording Indicator")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Position")
+                                    .font(.subheadline)
+                                Text("Where the floating indicator appears, or hide it entirely")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Picker("", selection: $viewModel.indicatorPosition) {
+                                ForEach(IndicatorPosition.allCases) { position in
+                                    Text(position.displayName).tag(position)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 180)
                         }
                     }
                 }

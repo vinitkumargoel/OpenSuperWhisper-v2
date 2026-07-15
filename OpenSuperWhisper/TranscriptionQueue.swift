@@ -166,6 +166,50 @@ class TranscriptionQueue: ObservableObject {
         startProcessingQueue()
     }
 
+    /// Re-runs only the LLM formatting step on the stored raw transcript —
+    /// no audio re-transcription. `model` overrides the configured LLM model
+    /// for this one request (nil/empty = use the settings default).
+    ///
+    /// The transient "formatting" state is only broadcast to the UI, never
+    /// persisted, so the ASR queue can't mistake the row for pending work.
+    func reformatRecording(_ recording: Recording, model: String?) async throws {
+        let raw = recording.rawTranscription?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = (raw?.isEmpty == false ? raw! : recording.transcription)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { return }
+
+        postReformatProgress(recording.id, progress: 0.9, status: .formatting, isRegeneration: true)
+
+        do {
+            let formattedRaw = try await LLMTextFormatter().format(source, modelOverride: model)
+            let formatted = VocabularyProcessor.applyConfigured(formattedRaw)
+            await recordingStore.updateRecordingProgressOnlySync(
+                recording.id,
+                transcription: formatted,
+                progress: 1.0,
+                status: .completed,
+                rawTranscription: source,
+                isRegeneration: false
+            )
+        } catch {
+            postReformatProgress(recording.id, progress: 1.0, status: .completed, isRegeneration: false)
+            throw error
+        }
+    }
+
+    private func postReformatProgress(_ id: UUID, progress: Float, status: RecordingStatus, isRegeneration: Bool) {
+        NotificationCenter.default.post(
+            name: RecordingStore.recordingProgressDidUpdateNotification,
+            object: nil,
+            userInfo: [
+                "id": id,
+                "progress": progress,
+                "status": status,
+                "isRegeneration": isRegeneration
+            ]
+        )
+    }
+
     private func processQueue() async {
         while let recording = recordingStore.getNextPendingRecording() {
             currentRecordingId = recording.id

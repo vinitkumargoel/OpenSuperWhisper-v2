@@ -122,6 +122,12 @@ class TranscriptionService: ObservableObject {
                     self.progress = newProgress
                 }
             }
+            whisperEngine.onSegmentUpdate = { [weak self] partialText in
+                Task { @MainActor in
+                    guard let self = self, !self.isCancelled else { return }
+                    self.currentSegment = partialText
+                }
+            }
         } else if let fluidEngine = engine as? FluidAudioEngine {
             fluidEngine.onProgressUpdate = { [weak self] newProgress in
                 Task { @MainActor in

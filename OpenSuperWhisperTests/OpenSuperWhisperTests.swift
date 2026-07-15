@@ -974,74 +974,74 @@ final class AddSpaceAfterSentenceTests: XCTestCase {
     }
     
     func testApplyPostProcessing_addsSpaceWhenEndsWithPeriod() {
-        let result = IndicatorViewModel.applyPostProcessing("Hello world.")
+        let result = FinalTextProcessor.applyPastePostProcessing("Hello world.")
         XCTAssertEqual(result, "Hello world. ")
     }
     
     func testApplyPostProcessing_noSpaceWhenNoPeriod() {
-        let result = IndicatorViewModel.applyPostProcessing("Hello world")
+        let result = FinalTextProcessor.applyPastePostProcessing("Hello world")
         XCTAssertEqual(result, "Hello world")
     }
     
     func testApplyPostProcessing_noSpaceWhenDisabled() {
         AppPreferences.shared.addSpaceAfterSentence = false
-        let result = IndicatorViewModel.applyPostProcessing("Hello world.")
+        let result = FinalTextProcessor.applyPastePostProcessing("Hello world.")
         XCTAssertEqual(result, "Hello world.")
     }
     
     func testApplyPostProcessing_emptyString() {
-        let result = IndicatorViewModel.applyPostProcessing("")
+        let result = FinalTextProcessor.applyPastePostProcessing("")
         XCTAssertEqual(result, "")
     }
     
     func testApplyPostProcessing_onlyPeriod() {
-        let result = IndicatorViewModel.applyPostProcessing(".")
+        let result = FinalTextProcessor.applyPastePostProcessing(".")
         XCTAssertEqual(result, ". ")
     }
     
     func testApplyPostProcessing_endsWithQuestionMark() {
-        let result = IndicatorViewModel.applyPostProcessing("How are you?")
+        let result = FinalTextProcessor.applyPastePostProcessing("How are you?")
         XCTAssertEqual(result, "How are you? ")
     }
     
     func testApplyPostProcessing_endsWithExclamationMark() {
-        let result = IndicatorViewModel.applyPostProcessing("Wow!")
+        let result = FinalTextProcessor.applyPastePostProcessing("Wow!")
         XCTAssertEqual(result, "Wow! ")
     }
     
     func testApplyPostProcessing_endsWithComma() {
-        let result = IndicatorViewModel.applyPostProcessing("First,")
+        let result = FinalTextProcessor.applyPastePostProcessing("First,")
         XCTAssertEqual(result, "First, ")
     }
     
     func testApplyPostProcessing_endsWithColon() {
-        let result = IndicatorViewModel.applyPostProcessing("Note:")
+        let result = FinalTextProcessor.applyPastePostProcessing("Note:")
         XCTAssertEqual(result, "Note: ")
     }
     
     func testApplyPostProcessing_endsWithSemicolon() {
-        let result = IndicatorViewModel.applyPostProcessing("Done;")
+        let result = FinalTextProcessor.applyPastePostProcessing("Done;")
         XCTAssertEqual(result, "Done; ")
     }
     
     func testApplyPostProcessing_endsWithEllipsis() {
-        let result = IndicatorViewModel.applyPostProcessing("Well...")
+        let result = FinalTextProcessor.applyPastePostProcessing("Well...")
         XCTAssertEqual(result, "Well... ")
     }
     
     func testApplyPostProcessing_multipleSentences() {
-        let result = IndicatorViewModel.applyPostProcessing("First sentence. Second sentence.")
+        let result = FinalTextProcessor.applyPastePostProcessing("First sentence. Second sentence.")
         XCTAssertEqual(result, "First sentence. Second sentence. ")
     }
     
     func testApplyPostProcessing_endsWithLetterNoSpace() {
-        let result = IndicatorViewModel.applyPostProcessing("No punctuation here")
+        let result = FinalTextProcessor.applyPastePostProcessing("No punctuation here")
         XCTAssertEqual(result, "No punctuation here")
     }
     
     func testApplyPostProcessing_defaultPreferenceIsEnabled() {
         UserDefaults.standard.removeObject(forKey: "addSpaceAfterSentence")
-        let result = IndicatorViewModel.applyPostProcessing("Test.")
+        let result = FinalTextProcessor.applyPastePostProcessing("Test.")
         XCTAssertEqual(result, "Test. ")
     }
 }

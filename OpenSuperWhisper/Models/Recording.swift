@@ -158,6 +158,21 @@ class RecordingStore: ObservableObject {
         }
     }
     
+    /// All completed recordings, newest first, for export.
+    nonisolated func fetchAllForExport() async -> [Recording] {
+        do {
+            return try await dbQueue.read { db in
+                try Recording
+                    .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
+                    .order(Recording.Columns.timestamp.desc)
+                    .fetchAll(db)
+            }
+        } catch {
+            print("Failed to fetch recordings for export: \(error)")
+            return []
+        }
+    }
+
     nonisolated func fetchRecordings(limit: Int, offset: Int) async throws -> [Recording] {
         try await dbQueue.read { db in
             try Recording

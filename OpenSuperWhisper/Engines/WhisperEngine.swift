@@ -4,6 +4,7 @@ import CoreAudioTypes
 
 private class ProgressContext {
     var onProgress: ((Float) -> Void)?
+    var onSegment: ((String) -> Void)?
     private var _lastReportedProgress: Float = 0.0
     private let lock = NSLock()
     
@@ -57,7 +58,10 @@ class WhisperEngine: TranscriptionEngine {
     }
     
     var onProgressUpdate: ((Float) -> Void)?
-    
+    /// Streams the accumulated transcript as whisper decodes each segment
+    /// (delivered on the main queue).
+    var onSegmentUpdate: ((String) -> Void)?
+
     var isModelLoaded: Bool {
         context != nil
     }
@@ -92,6 +96,7 @@ class WhisperEngine: TranscriptionEngine {
         // Setup progress context for callback
         progressContext = ProgressContext()
         progressContext?.onProgress = onProgressUpdate
+        progressContext?.onSegment = onSegmentUpdate
         
         defer {
             abortFlag?.deallocate()
@@ -150,9 +155,37 @@ class WhisperEngine: TranscriptionEngine {
             }
         }
         
+        // New-segment callback: streams partial transcript text while decoding.
+        // Called synchronously from whisper_full's thread, so the ctx pointer and
+        // segment accessors are safe to use inside the callback body.
+        typealias WhisperNewSegmentCallback = @convention(c) (OpaquePointer?, OpaquePointer?, Int32, UnsafeMutableRawPointer?) -> Void
+        let newSegmentCallback: WhisperNewSegmentCallback = { ctx, _, _, userData in
+            guard let userData = userData, let ctx = ctx else { return }
+            let progressCtx = Unmanaged<ProgressContext>.fromOpaque(userData).takeUnretainedValue()
+            guard progressCtx.onSegment != nil else { return }
+
+            let nSegments = whisper_full_n_segments(ctx)
+            var text = ""
+            for i in 0..<nSegments {
+                if let cText = whisper_full_get_segment_text(ctx, i) {
+                    text += String(cString: cText)
+                }
+            }
+            let snapshot = text
+                .replacingOccurrences(of: "[MUSIC]", with: "")
+                .replacingOccurrences(of: "[BLANK_AUDIO]", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            DispatchQueue.main.async {
+                progressCtx.onSegment?(snapshot)
+            }
+        }
+
         let progressContextPtr = Unmanaged.passUnretained(progressContext!).toOpaque()
         params.progressCallback = progressCallback
         params.progressCallbackUserData = progressContextPtr
+        params.newSegmentCallback = newSegmentCallback
+        params.newSegmentCallbackUserData = progressContextPtr
         
         if settings.useBeamSearch {
             params.beamSearchBeamSize = Int32(settings.beamSize)

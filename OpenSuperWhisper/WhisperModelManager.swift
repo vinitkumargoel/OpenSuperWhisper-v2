@@ -13,16 +13,32 @@ class WhisperDownloadDelegate: NSObject, URLSessionTaskDelegate, URLSessionDownl
     }
     
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        // A 404/403/500 response still "finishes" the download with the error
+        // page's bytes — reject anything that isn't a 2xx before accepting the file.
+        if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let error = NSError(
+                domain: "WhisperModelManager",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Model download failed: server returned HTTP \(http.statusCode)"]
+            )
+            completionHandler?(nil, error)
+            completionHandler = nil
+            return
+        }
         completionHandler?(location, nil)
+        completionHandler = nil
     }
-    
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-      
-        if expectedContentLength == 0 {
+
+        if expectedContentLength <= 0 {
             expectedContentLength = totalBytesExpectedToWrite
         }
+        // Content-Length can be missing (-1) or zero; skip ratio updates rather
+        // than reporting NaN/negative progress.
+        guard expectedContentLength > 0 else { return }
         let progress = Double(totalBytesWritten) / Double(expectedContentLength)
-        
+
         DispatchQueue.main.async { [weak self] in
             self?.progressCallback(progress)
         }
@@ -110,13 +126,18 @@ class WhisperModelManager {
     func downloadModel(url: URL, name: String, progressCallback: @escaping (Double) -> Void) async throws {
         let destinationURL = modelsDirectory.appendingPathComponent(name)
         
-        // Check if model already exists
+        // Check if model already exists (and is actually a valid model, not a
+        // leftover corrupt download from before validation existed)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
-            print("Model already exists at: \(destinationURL.path)")
-            DispatchQueue.main.async {
-                progressCallback(1.0)
+            if (try? Self.validateModelFile(at: destinationURL)) != nil {
+                print("Model already exists at: \(destinationURL.path)")
+                DispatchQueue.main.async {
+                    progressCallback(1.0)
+                }
+                return
             }
-            return
+            print("Existing model file is invalid, re-downloading: \(destinationURL.path)")
+            try? FileManager.default.removeItem(at: destinationURL)
         }
         
         print("Starting model download:")
@@ -170,15 +191,23 @@ class WhisperModelManager {
                 do {
                     print("Download completed. Moving file to destination...")
                     try FileManager.default.moveItem(at: location, to: destinationURL)
+
+                    do {
+                        try WhisperModelManager.validateModelFile(at: destinationURL)
+                    } catch {
+                        try? FileManager.default.removeItem(at: destinationURL)
+                        throw error
+                    }
+
                     print("Model successfully saved to: \(destinationURL.path)")
-                    
+
                     DispatchQueue.main.async {
                         progressCallback(1.0)
                     }
-                    
+
                     continuation.resume(returning: ())
                 } catch {
-                    print("Failed to move downloaded file: \(error)")
+                    print("Failed to save downloaded model: \(error)")
                     continuation.resume(throwing: error)
                 }
             }
@@ -203,5 +232,32 @@ class WhisperModelManager {
     func isModelDownloaded(name: String) -> Bool {
         let modelPath = modelsDirectory.appendingPathComponent(name).path
         return FileManager.default.fileExists(atPath: modelPath)
+    }
+
+    /// Rejects files that are not GGML whisper models (e.g. an HTML error page
+    /// saved by a failed download): checks the GGML magic ("ggml", 0x67676d6c
+    /// little-endian) and a sane minimum size.
+    static func validateModelFile(at url: URL) throws {
+        let minimumModelSize: Int64 = 1_000_000
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fileSize = (attributes[.size] as? Int64) ?? 0
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let magicData = try handle.read(upToCount: 4) ?? Data()
+
+        let ggmlMagic: UInt32 = 0x67676d6c
+        let magic: UInt32 = magicData.count == 4
+            ? magicData.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+            : 0
+
+        guard magic == ggmlMagic, fileSize >= minimumModelSize else {
+            throw NSError(
+                domain: "WhisperModelManager",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Downloaded file is not a valid Whisper model (corrupt download or server error page). Please try again."]
+            )
+        }
     }
 }
