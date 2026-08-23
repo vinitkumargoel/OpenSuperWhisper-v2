@@ -13,11 +13,17 @@ class ClipboardUtil {
         pasteboard.setString(text, forType: .string)
     }
 
-    static func insertText(_ text: String) {
+    /// Pastes `text` into the focused app by putting it on the clipboard and
+    /// synthesizing ⌘V.
+    ///
+    /// - Parameter restoreClipboard: when `true` the previous clipboard contents
+    ///   are put back afterwards; when `false` the transcript stays on the
+    ///   clipboard so the user can paste it again elsewhere.
+    static func insertText(_ text: String, restoreClipboard: Bool = true) {
         let pasteboard = NSPasteboard.general
 
-        // Save current pasteboard contents
-        let savedContents = saveCurrentPasteboardContents()
+        // Save current pasteboard contents (only if we intend to put them back)
+        let savedContents = restoreClipboard ? saveCurrentPasteboardContents() : nil
         
         // Set new text to pasteboard
         pasteboard.declareTypes([.string], owner: nil)

@@ -27,11 +27,15 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
     var targetAppBundleID: String?
     /// User favourite flag.
     var isStarred: Bool = false
+    /// Why the last transcription / AI-formatting attempt failed, if it did.
+    /// Kept separate from `transcription` so a failed regenerate never destroys
+    /// a good transcript. Cleared on the next successful run.
+    var errorMessage: String?
 
     var isRegeneration: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, fileName, transcription, rawTranscription, duration, status, progress, sourceFileURL, targetAppName, targetAppBundleID, isStarred
+        case id, timestamp, fileName, transcription, rawTranscription, duration, status, progress, sourceFileURL, targetAppName, targetAppBundleID, isStarred, errorMessage
     }
 
     static func == (lhs: Recording, rhs: Recording) -> Bool {
@@ -41,6 +45,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
                lhs.transcription == rhs.transcription &&
                lhs.rawTranscription == rhs.rawTranscription &&
                lhs.isStarred == rhs.isStarred &&
+               lhs.errorMessage == rhs.errorMessage &&
                lhs.targetAppName == rhs.targetAppName &&
                lhs.isRegeneration == rhs.isRegeneration
     }
@@ -81,6 +86,7 @@ struct Recording: Identifiable, Codable, FetchableRecord, PersistableRecord, Equ
         static let targetAppName = Column(CodingKeys.targetAppName)
         static let targetAppBundleID = Column(CodingKeys.targetAppBundleID)
         static let isStarred = Column(CodingKeys.isStarred)
+        static let errorMessage = Column(CodingKeys.errorMessage)
     }
 }
 
@@ -178,6 +184,15 @@ class RecordingStore: ObservableObject {
             if !columnNames.contains("isStarred") {
                 try db.alter(table: Recording.databaseTableName) { t in
                     t.add(column: "isStarred", .boolean).notNull().defaults(to: false)
+                }
+            }
+        }
+
+        migrator.registerMigration("v6_add_error_message") { db in
+            let columnNames = try db.columns(in: Recording.databaseTableName).map { $0.name }
+            if !columnNames.contains("errorMessage") {
+                try db.alter(table: Recording.databaseTableName) { t in
+                    t.add(column: "errorMessage", .text)
                 }
             }
         }
@@ -371,6 +386,58 @@ class RecordingStore: ObservableObject {
         }
     }
     
+    /// Persists a dictation attempt that failed to transcribe, keeping the audio
+    /// so the user can hit Regenerate on the row in History.
+    ///
+    /// The WAV is moved out of the temp directory into the app-owned recordings
+    /// folder and `sourceFileURL` is deliberately left `nil` —
+    /// `TranscriptionQueue.requeueRecording` falls back to `recording.url` and
+    /// writes that path back, so regeneration works with no extra bookkeeping.
+    ///
+    /// - Returns: the stored recording, or `nil` if the audio could not be kept
+    ///   (in which case the temp file is removed and nothing is persisted).
+    @discardableResult
+    func saveFailedRecording(
+        tempURL: URL,
+        duration: TimeInterval,
+        targetAppName: String?,
+        targetAppBundleID: String?,
+        error: Error
+    ) async -> Recording? {
+        let timestamp = Date()
+        let recording = Recording(
+            id: UUID(),
+            timestamp: timestamp,
+            fileName: "\(Int(timestamp.timeIntervalSince1970)).wav",
+            transcription: "",
+            rawTranscription: nil,
+            duration: duration,
+            status: .failed,
+            progress: 0.0,
+            sourceFileURL: nil,
+            targetAppName: targetAppName,
+            targetAppBundleID: targetAppBundleID,
+            errorMessage: error.localizedDescription
+        )
+
+        do {
+            try AudioRecorder.shared.moveTemporaryRecording(from: tempURL, to: recording.url)
+        } catch {
+            print("Failed to keep audio for failed transcription: \(error)")
+            try? FileManager.default.removeItem(at: tempURL)
+            return nil
+        }
+
+        do {
+            try await addRecordingSync(recording)
+            return recording
+        } catch {
+            print("Failed to save failed recording: \(error)")
+            try? FileManager.default.removeItem(at: recording.url)
+            return nil
+        }
+    }
+
     private nonisolated func insertRecording(_ recording: Recording) async throws {
         try await dbQueue.write { db in
             try recording.insert(db)
@@ -405,16 +472,29 @@ class RecordingStore: ObservableObject {
     
     static let recordingProgressDidUpdateNotification = Notification.Name("RecordingStore.recordingProgressDidUpdate")
     
-    func updateRecordingProgressOnlySync(_ id: UUID, transcription: String, progress: Float, status: RecordingStatus, rawTranscription: String? = nil, isRegeneration: Bool? = nil) async {
+    /// Updates a row's progress/status, and optionally its text.
+    ///
+    /// - Parameters:
+    ///   - transcription: `nil` leaves the stored transcript untouched. Failures
+    ///     pass `nil` so a failed regenerate can never destroy a good transcript.
+    ///   - errorMessage: `nil` leaves the stored message untouched; `""` clears it.
+    func updateRecordingProgressOnlySync(_ id: UUID, transcription: String? = nil, progress: Float, status: RecordingStatus, rawTranscription: String? = nil, errorMessage: String? = nil, isRegeneration: Bool? = nil) async {
+        // "" means "clear the column"; a non-empty string sets it.
+        let resolvedError: String?? = errorMessage.map { $0.isEmpty ? String?.none : $0 }
         do {
             _ = try await dbQueue.write { db -> Int in
                 var assignments: [ColumnAssignment] = [
-                    Recording.Columns.transcription.set(to: transcription),
                     Recording.Columns.progress.set(to: progress),
                     Recording.Columns.status.set(to: status.rawValue)
                 ]
+                if let transcription {
+                    assignments.append(Recording.Columns.transcription.set(to: transcription))
+                }
                 if let rawTranscription {
                     assignments.append(Recording.Columns.rawTranscription.set(to: rawTranscription))
+                }
+                if let resolvedError {
+                    assignments.append(Recording.Columns.errorMessage.set(to: resolvedError))
                 }
                 return try Recording
                     .filter(Recording.Columns.id == id)
@@ -422,9 +502,14 @@ class RecordingStore: ObservableObject {
             }
             if let index = recordings.firstIndex(where: { $0.id == id }) {
                 var updated = recordings[index]
-                updated.transcription = transcription
+                if let transcription {
+                    updated.transcription = transcription
+                }
                 if let rawTranscription {
                     updated.rawTranscription = rawTranscription
+                }
+                if let resolvedError {
+                    updated.errorMessage = resolvedError
                 }
                 updated.progress = progress
                 updated.status = status
@@ -436,10 +521,16 @@ class RecordingStore: ObservableObject {
             
             var userInfo: [String: Any] = [
                 "id": id,
-                "transcription": transcription,
                 "progress": progress,
                 "status": status
             ]
+            if let transcription {
+                userInfo["transcription"] = transcription
+            }
+            if let resolvedError {
+                // NSNull marks "cleared" — a missing key means "unchanged".
+                userInfo["errorMessage"] = resolvedError ?? NSNull()
+            }
             if let isRegeneration = isRegeneration {
                 userInfo["isRegeneration"] = isRegeneration
             }

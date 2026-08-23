@@ -144,7 +144,14 @@ struct LLMTextFormatter {
 }
 
 enum FinalTextProcessor {
-    static func formatIfNeeded(_ text: String, onWillFormat: (() async -> Void)? = nil) async -> String {
+    /// - Parameter onFormattingFailed: called when AI formatting was enabled but
+    ///   errored. The raw transcript is still returned, so callers should report
+    ///   this rather than let a bad API key look like a bad transcription.
+    static func formatIfNeeded(
+        _ text: String,
+        onWillFormat: (() async -> Void)? = nil,
+        onFormattingFailed: ((Error) -> Void)? = nil
+    ) async -> String {
         // Spoken punctuation/formatting commands ("period", "new line") are
         // resolved first, on the raw transcript, when the user enables them.
         var input = text
@@ -164,6 +171,7 @@ enum FinalTextProcessor {
             return VocabularyProcessor.applyConfigured(formatted)
         } catch {
             print("LLM formatting failed: \(error.localizedDescription)")
+            onFormattingFailed?(error)
             return VocabularyProcessor.applyConfigured(input)
         }
     }

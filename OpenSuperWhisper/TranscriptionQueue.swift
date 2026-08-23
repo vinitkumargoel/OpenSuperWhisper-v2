@@ -141,11 +141,13 @@ class TranscriptionQueue: ObservableObject {
         }.value
         
         guard let sourceURL = sourceURL else {
+            // Leave the existing transcript alone — a failed regenerate must
+            // never destroy text that was already good.
             await recordingStore.updateRecordingProgressOnlySync(
                 recording.id,
-                transcription: "Cannot regenerate: audio file not found",
                 progress: 0.0,
-                status: .failed
+                status: .failed,
+                errorMessage: "Cannot regenerate: audio file not found"
             )
             return
         }
@@ -189,6 +191,8 @@ class TranscriptionQueue: ObservableObject {
                 progress: 1.0,
                 status: .completed,
                 rawTranscription: source,
+                // A successful manual reformat clears any stale warning.
+                errorMessage: "",
                 isRegeneration: false
             )
         } catch {
@@ -228,9 +232,9 @@ class TranscriptionQueue: ObservableObject {
               !sourceURLString.isEmpty else {
             await recordingStore.updateRecordingProgressOnlySync(
                 recording.id,
-                transcription: "Source file not found",
                 progress: 0.0,
-                status: .failed
+                status: .failed,
+                errorMessage: "Source file not found"
             )
             return
         }
@@ -244,9 +248,9 @@ class TranscriptionQueue: ObservableObject {
         guard sourceExists else {
             await recordingStore.updateRecordingProgressOnlySync(
                 recording.id,
-                transcription: "Source file not found",
                 progress: 0.0,
-                status: .failed
+                status: .failed,
+                errorMessage: "Source file not found"
             )
             return
         }
@@ -282,12 +286,15 @@ class TranscriptionQueue: ObservableObject {
 
                 let settings = Settings()
                 let rawText = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings)
+                var formattingError: Error?
                 let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                     await self.recordingStore.updateRecordingStatusOnly(
                         recording.id,
                         progress: 0.95,
                         status: .formatting
                     )
+                } onFormattingFailed: { error in
+                    formattingError = error
                 }
 
                 if isRecordingCancelled(recording.id) || Task.isCancelled {
@@ -315,6 +322,8 @@ class TranscriptionQueue: ObservableObject {
                     progress: 1.0,
                     status: .completed,
                     rawTranscription: rawText,
+                    // "" clears any stale error from a previous failed attempt.
+                    errorMessage: formattingError?.localizedDescription ?? "",
                     isRegeneration: false
                 )
 
@@ -322,9 +331,9 @@ class TranscriptionQueue: ObservableObject {
                 if !isRecordingCancelled(recording.id) && !Task.isCancelled {
                     await recordingStore.updateRecordingProgressOnlySync(
                         recording.id,
-                        transcription: "Failed to transcribe: \(error.localizedDescription)",
                         progress: 0.0,
                         status: .failed,
+                        errorMessage: "Failed to transcribe: \(error.localizedDescription)",
                         isRegeneration: false
                     )
                 }

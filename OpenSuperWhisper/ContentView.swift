@@ -129,10 +129,13 @@ class ContentViewModel: ObservableObject {
         loadMore()
     }
     
-    func handleProgressUpdate(id: UUID, transcription: String?, progress: Float, status: RecordingStatus, isRegeneration: Bool?) {
+    func handleProgressUpdate(id: UUID, transcription: String?, progress: Float, status: RecordingStatus, errorMessage: String?? = nil, isRegeneration: Bool?) {
         if let index = recordings.firstIndex(where: { $0.id == id }) {
             if let transcription = transcription {
                 recordings[index].transcription = transcription
+            }
+            if let errorMessage {
+                recordings[index].errorMessage = errorMessage
             }
             recordings[index].progress = progress
             recordings[index].status = status
@@ -212,10 +215,13 @@ class ContentViewModel: ObservableObject {
                 do {
                     print("start decoding...")
                     let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    var formattingError: Error?
                     let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                         await MainActor.run {
                             self.state = .formatting
                         }
+                    } onFormattingFailed: { error in
+                        formattingError = error
                     }
 
                     // Capture the current recording duration
@@ -253,7 +259,8 @@ class ContentViewModel: ObservableObject {
                             progress: 1.0,
                             sourceFileURL: nil,
                             targetAppName: FocusUtils.lastFrontmostAppName,
-                            targetAppBundleID: FocusUtils.lastFrontmostBundleID
+                            targetAppBundleID: FocusUtils.lastFrontmostBundleID,
+                            errorMessage: formattingError?.localizedDescription
                         )
                         self.recordingStore.addRecording(newRecording)
                         
@@ -267,8 +274,18 @@ class ContentViewModel: ObservableObject {
 
                     print("Transcription result: \(text)")
                 } catch {
+                    // Keep the audio and record the attempt so the user can hit
+                    // Regenerate on the row instead of losing the dictation.
                     print("Error transcribing audio: \(error)")
-                    try? FileManager.default.removeItem(at: tempURL)
+                    let duration = await MainActor.run { self.recordingDuration }
+                    await self.recordingStore.saveFailedRecording(
+                        tempURL: tempURL,
+                        duration: duration,
+                        targetAppName: FocusUtils.lastFrontmostAppName,
+                        targetAppBundleID: FocusUtils.lastFrontmostBundleID,
+                        error: error
+                    )
+                    await MainActor.run { self.loadInitialData() }
                 }
 
                 await MainActor.run {
@@ -761,12 +778,15 @@ struct ContentView: View {
             
             let transcription = userInfo["transcription"] as? String
             let isRegeneration = userInfo["isRegeneration"] as? Bool
+            // Absent key = unchanged; NSNull = cleared.
+            let errorMessage: String?? = userInfo["errorMessage"].map { $0 as? String }
             
             viewModel.handleProgressUpdate(
                 id: id,
                 transcription: transcription,
                 progress: progress,
                 status: status,
+                errorMessage: errorMessage,
                 isRegeneration: isRegeneration
             )
         }
@@ -1014,16 +1034,41 @@ struct RecordingRow: View {
                             .font(.caption)
                             .foregroundColor(.red)
                     }
-                    
-                    if !recording.transcription.isEmpty {
+
+                    // Newer rows carry the reason in `errorMessage`; older ones
+                    // had it written into `transcription`.
+                    let reason = recording.errorMessage ?? recording.transcription
+                    if !reason.isEmpty {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    // A failed run keeps whatever transcript was already there.
+                    if recording.errorMessage != nil, !recording.transcription.isEmpty {
                         Text(recording.transcription)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .padding(.top, 2)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, isPending && !isRegenerating ? 4 : 8)
             } else if !displayText.isEmpty {
+                if let warning = recording.errorMessage, !warning.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        Text("AI formatting didn't run: \(warning)")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .lineLimit(2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                }
+
                 if hasRawTranscription {
                     HStack(spacing: 6) {
                         Picker("", selection: $showRawTranscription) {

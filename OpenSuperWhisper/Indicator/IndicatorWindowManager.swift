@@ -70,10 +70,14 @@ class IndicatorWindowManager: IndicatorViewDelegate {
 
         if window == nil {
             // Create window if it doesn't exist - using NSPanel for full-screen compatibility.
-            // The panel is larger than the pill so the live transcript can expand it;
-            // the pill anchors inside via contentAlignment.
+            // The panel is deliberately much taller than the pill so the live
+            // transcript can grow to its full multi-line height without clipping;
+            // the pill anchors to one edge via contentAlignment, so the extra
+            // room always extends away from it and nothing shifts on screen.
+            // It is transparent and ignores mouse events, so the larger footprint
+            // is invisible and non-blocking.
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 360, height: 140),
+                contentRect: NSRect(x: 0, y: 0, width: 360, height: 260),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false

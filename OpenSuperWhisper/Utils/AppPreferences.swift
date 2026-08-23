@@ -131,6 +131,11 @@ final class AppPreferences {
     @UserDefault(key: "autoPasteEnabled", defaultValue: true)
     var autoPasteEnabled: Bool
 
+    /// When on, the transcript stays on the clipboard after an auto-paste
+    /// instead of the previous clipboard contents being restored.
+    @UserDefault(key: "keepTranscriptOnClipboard", defaultValue: true)
+    var keepTranscriptOnClipboard: Bool
+
     /// Auto-delete completed recordings older than N days. 0 = keep forever.
     @UserDefault(key: "historyRetentionDays", defaultValue: 0)
     var historyRetentionDays: Int

@@ -11,6 +11,8 @@ enum RecordingState {
     case decoding
     case formatting
     case busy
+    /// A transient message shown just before the pill hides (failure, warning).
+    case notice
 }
 
 @MainActor
@@ -26,6 +28,10 @@ class IndicatorViewModel: ObservableObject {
     @Published var recorder: AudioRecorder = .shared
     @Published var isVisible = false
     @Published var partialText: String = ""
+    /// Text shown in the `.notice` state.
+    @Published var noticeMessage: String = ""
+    /// Drives the notice tint: red for failures, orange for warnings.
+    @Published var noticeIsError: Bool = false
 
     /// Where the pill anchors inside the transparent panel (set by IndicatorWindowManager).
     var contentAlignment: Alignment = .bottom
@@ -96,6 +102,21 @@ class IndicatorViewModel: ObservableObject {
             }
         }
     }
+
+    /// Holds the pill open for a moment with a short message, then hides it.
+    /// Used instead of vanishing silently when something went wrong.
+    func showNotice(_ message: String, isError: Bool) {
+        noticeMessage = message
+        noticeIsError = isError
+        state = .notice
+
+        hideTimer?.invalidate()
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.delegate?.didFinishDecoding()
+            }
+        }
+    }
     
     func startRecording() {
         if isTranscriptionBusy {
@@ -134,20 +155,23 @@ class IndicatorViewModel: ObservableObject {
         if let tempURL = recorder.stopRecording() {
             Task { [weak self] in
                 guard let self = self else { return }
-                
+
+                // When set, the pill shows this briefly and hides itself on a
+                // timer, so we must not also hide it immediately below.
+                var notice: (message: String, isError: Bool)?
+
                 do {
                     print("start decoding...")
                     let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    var formattingError: Error?
                     let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                         await MainActor.run {
                             self.state = .formatting
                         }
+                    } onFormattingFailed: { error in
+                        formattingError = error
                     }
-                    let duration = await (try? Task.detached(priority: .userInitiated) {
-                        let asset = AVURLAsset(url: tempURL)
-                        let duration = try await asset.load(.duration)
-                        return CMTimeGetSeconds(duration)
-                    }.value) ?? 0.0
+                    let duration = await Self.audioDuration(of: tempURL)
                     
                     // Create a new Recording instance
                     let timestamp = Date()
@@ -181,24 +205,47 @@ class IndicatorViewModel: ObservableObject {
                             progress: 1.0,
                             sourceFileURL: nil,
                             targetAppName: FocusUtils.lastFrontmostAppName,
-                            targetAppBundleID: FocusUtils.lastFrontmostBundleID
+                            targetAppBundleID: FocusUtils.lastFrontmostBundleID,
+                            errorMessage: formattingError?.localizedDescription
                         ))
                     }
                     
                     insertText(text)
                     print("Transcription result: \(text)")
+
+                    // The transcript was delivered, but AI cleanup silently fell
+                    // back to raw text — say so instead of leaving the user to
+                    // wonder why the formatting looks wrong.
+                    if formattingError != nil {
+                        notice = ("AI formatting unavailable - pasted raw text", false)
+                    }
                 } catch {
                     print("Error transcribing audio: \(error)")
-                    try? FileManager.default.removeItem(at: tempURL)
+                    let duration = await Self.audioDuration(of: tempURL)
+                    let saved = await self.recordingStore.saveFailedRecording(
+                        tempURL: tempURL,
+                        duration: duration,
+                        targetAppName: FocusUtils.lastFrontmostAppName,
+                        targetAppBundleID: FocusUtils.lastFrontmostBundleID,
+                        error: error
+                    )
+                    notice = saved != nil
+                        ? ("Transcription failed - saved to History", true)
+                        : ("Transcription failed - audio could not be saved", true)
                 }
-                
+
                 await MainActor.run {
-                    self.delegate?.didFinishDecoding()
+                    if let notice {
+                        self.showNotice(notice.message, isError: notice.isError)
+                    } else {
+                        self.delegate?.didFinishDecoding()
+                    }
                 }
             }
         } else {
-            
-            print("!!! Not found record url !!!")
+            // stopRecording() returns nil for clips under a second - a normal
+            // "too short to transcribe" case, not a failure.
+            print("Recording too short to transcribe - discarded")
             
             Task {
                 await MainActor.run {
@@ -207,6 +254,15 @@ class IndicatorViewModel: ObservableObject {
             }
         }
     }
+
+    /// Best-effort duration of a recorded file; 0 when it cannot be read.
+    private static func audioDuration(of url: URL) async -> TimeInterval {
+        await (try? Task.detached(priority: .userInitiated) {
+            let asset = AVURLAsset(url: url)
+            let duration = try await asset.load(.duration)
+            return CMTimeGetSeconds(duration)
+        }.value) ?? 0.0
+    }
     
     func insertText(_ text: String) {
         let finalText = FinalTextProcessor.applyPastePostProcessing(text)
@@ -214,7 +270,13 @@ class IndicatorViewModel: ObservableObject {
         // (the synthesized ⌘V needs it). Otherwise fall back to clipboard-only so
         // the text is never lost — the user can paste manually.
         if AppPreferences.shared.autoPasteEnabled && AXIsProcessTrusted() {
-            ClipboardUtil.insertText(finalText)
+            // Pasting works by putting the text on the clipboard and sending ⌘V.
+            // Whether the previous clipboard comes back afterwards is the user's
+            // call: keeping the transcript lets them paste it again elsewhere.
+            ClipboardUtil.insertText(
+                finalText,
+                restoreClipboard: !AppPreferences.shared.keepTranscriptOnClipboard
+            )
         } else {
             ClipboardUtil.copyToClipboard(finalText)
         }
@@ -321,8 +383,20 @@ struct IndicatorWindow: View {
 
     private var style: IndicatorStyle { IndicatorStyle.current }
 
+    /// Measured height of the live transcript block, used to grow the pill.
+    @State private var liveTextHeight: CGFloat = 0
+
+    /// Roughly six lines at 12pt; past this the block scrolls instead of growing.
+    private let liveTextMaxHeight: CGFloat = 108
+
     private var hasPartialText: Bool {
         viewModel.state == .decoding && !viewModel.partialText.isEmpty
+    }
+
+    /// States that need the wide, vertically-padded pill because their content
+    /// wraps onto more than one line.
+    private var isWideContent: Bool {
+        hasPartialText || viewModel.state == .notice
     }
 
     var body: some View {
@@ -360,20 +434,34 @@ struct IndicatorWindow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
             case .decoding:
-                // Keep it single-line and horizontal: show the tail of the live
-                // transcript (head-truncated) so the pill never grows vertically.
-                HStack(spacing: 8) {
+                // Fixed width, growing height: the live transcript wraps and the
+                // pill grows line by line up to `liveTextMaxHeight`, after which
+                // it scrolls and stays pinned to the newest words.
+                HStack(alignment: .top, spacing: 8) {
                     ProgressView()
                         .scaleEffect(0.7)
                         .frame(width: 20)
 
                     if hasPartialText {
-                        Text(viewModel.partialText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ScrollView(.vertical) {
+                            Text(viewModel.partialText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .onGeometryChange(for: CGFloat.self) { proxy in
+                                    proxy.size.height
+                                } action: { height in
+                                    liveTextHeight = height
+                                }
+                        }
+                        .frame(height: min(max(liveTextHeight, 16), liveTextMaxHeight))
+                        // partialText is a full growing snapshot rebuilt on every
+                        // whisper segment, so anchor to the bottom to follow it.
+                        .defaultScrollAnchor(.bottom)
+                        .scrollIndicators(.never)
+                        .scrollDisabled(liveTextHeight <= liveTextMaxHeight)
                     } else {
                         Text("Transcribing...")
                             .font(.system(size: 13, weight: .semibold))
@@ -405,13 +493,30 @@ struct IndicatorWindow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
+            case .notice:
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: viewModel.noticeIsError
+                          ? "exclamationmark.triangle.fill"
+                          : "info.circle.fill")
+                        .foregroundColor(viewModel.noticeIsError ? .red : .orange)
+                        .frame(width: 24)
+
+                    Text(viewModel.noticeMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(viewModel.noticeIsError ? .red : .orange)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
             case .idle:
                 EmptyView()
             }
         }
         .foregroundColor(style.textColor)
         .padding(.horizontal, 24)
-        .padding(.vertical, hasPartialText ? 10 : 0)
+        .padding(.vertical, isWideContent ? 10 : 0)
         .frame(minHeight: 36)
         .background {
             rect
@@ -429,12 +534,12 @@ struct IndicatorWindow: View {
                 .shadow(color: .black.opacity(style.shadowOpacity), radius: 10, x: 0, y: 4)
         }
         .clipShape(rect)
-        .frame(width: hasPartialText ? 340 : 200)
+        .frame(width: isWideContent ? 340 : 200)
         .scaleEffect(viewModel.isVisible ? 1 : 0.5)
         .offset(y: viewModel.isVisible ? 0 : 20)
         .opacity(viewModel.isVisible ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewModel.isVisible)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hasPartialText)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWideContent)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: viewModel.contentAlignment)
         .onAppear {
             viewModel.isVisible = true

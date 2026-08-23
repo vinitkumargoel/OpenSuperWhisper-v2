@@ -156,6 +156,12 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
+    @Published var keepTranscriptOnClipboard: Bool {
+        didSet {
+            AppPreferences.shared.keepTranscriptOnClipboard = keepTranscriptOnClipboard
+        }
+    }
+
     @Published var dictationCommandsEnabled: Bool {
         didSet {
             AppPreferences.shared.dictationCommandsEnabled = dictationCommandsEnabled
@@ -356,6 +362,7 @@ class SettingsViewModel: ObservableObject {
         self.holdToRecord = prefs.holdToRecord
         self.addSpaceAfterSentence = prefs.addSpaceAfterSentence
         self.autoPasteEnabled = prefs.autoPasteEnabled
+        self.keepTranscriptOnClipboard = prefs.keepTranscriptOnClipboard
         self.dictationCommandsEnabled = prefs.dictationCommandsEnabled
         self.historyRetentionDays = prefs.historyRetentionDays
         self.indicatorPosition = IndicatorPosition(rawValue: prefs.indicatorPosition) ?? .nearCursor
@@ -1668,6 +1675,20 @@ struct SettingsView: View {
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.autoPasteEnabled)
+                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .labelsHidden()
+                        }
+
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Keep transcript on the clipboard")
+                                    .font(.subheadline)
+                                Text("Leave the transcript on the clipboard after pasting instead of restoring what was there before")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $viewModel.keepTranscriptOnClipboard)
                                 .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
                                 .labelsHidden()
                         }

@@ -1100,3 +1100,117 @@ final class TextUtilTests: XCTestCase {
         XCTAssertEqual(TextUtil.formatDuration(3600), "1h 0m 0s")
     }
 }
+
+/// Guards for the spoken-punctuation pass, which previously converted ordinary
+/// English words ("a period of time") into punctuation.
+final class DictationCommandProcessorTests: XCTestCase {
+
+    func testConvertsRealCommands() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("send it today period new line thanks"),
+            "Send it today.\nThanks"
+        )
+    }
+
+    func testConvertsUnambiguousPhrases() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("are you sure question mark"),
+            "Are you sure?"
+        )
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("done full stop"),
+            "Done."
+        )
+    }
+
+    func testKeepsDeterminedNouns() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("I waited a period of time"),
+            "I waited a period of time"
+        )
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("check the comma placement"),
+            "Check the comma placement"
+        )
+    }
+
+    func testKeepsNounFollowers() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("send comma separated values"),
+            "Send comma separated values"
+        )
+    }
+
+    // The ambiguous-word guards are built from a regex; if it ever fails to
+    // compile the command is silently skipped, so assert it still applies.
+    func testAmbiguousCommandsStillCompileAndApply() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("hello comma world"),
+            "Hello, world"
+        )
+    }
+
+    func testDoesNotCapitalizeAfterAbbreviations() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("use a fast model e.g. medium for accuracy"),
+            "Use a fast model e.g. medium for accuracy"
+        )
+    }
+
+    func testDoesNotCapitalizeAfterDecimals() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("upgrade to v1.2 beta today"),
+            "Upgrade to v1.2 beta today"
+        )
+    }
+
+    func testDoesNotCapitalizeAfterInitials() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("a U.S. based company"),
+            "A U.S. based company"
+        )
+    }
+
+    func testStillCapitalizesRealSentences() {
+        XCTAssertEqual(
+            DictationCommandProcessor.apply("that is done. now ship it"),
+            "That is done. Now ship it"
+        )
+    }
+}
+
+/// Custom-vocabulary substitutions must apply even when AI formatting is off.
+final class VocabularyProcessorTests: XCTestCase {
+
+    func testAppliesWholeWordSubstitution() {
+        let rules = [VocabularyRule(from: "clod code", to: "Claude Code")]
+        XCTAssertEqual(
+            VocabularyProcessor.apply("open clod code now", rules: rules),
+            "open Claude Code now"
+        )
+    }
+
+    func testDoesNotMatchInsideWords() {
+        let rules = [VocabularyRule(from: "api", to: "API")]
+        XCTAssertEqual(
+            VocabularyProcessor.apply("rapid api call", rules: rules),
+            "rapid API call"
+        )
+    }
+
+    func testCaseSensitiveRuleRespectsCase() {
+        let rules = [VocabularyRule(from: "Swift", to: "SwiftUI", caseSensitive: true)]
+        XCTAssertEqual(
+            VocabularyProcessor.apply("swift and Swift", rules: rules),
+            "swift and SwiftUI"
+        )
+    }
+
+    func testReplacementTextIsTakenLiterally() {
+        let rules = [VocabularyRule(from: "cost", to: "$1 per unit")]
+        XCTAssertEqual(
+            VocabularyProcessor.apply("the cost here", rules: rules),
+            "the $1 per unit here"
+        )
+    }
+}

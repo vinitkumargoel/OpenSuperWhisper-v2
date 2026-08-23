@@ -220,17 +220,30 @@ class WhisperEngine: TranscriptionEngine {
             guard let segmentText = context.fullGetSegmentText(iSegment: i) else { continue }
             
             if settings.showTimestamps {
+                // One line per segment is the whole point when timestamps are on.
                 let t0 = context.fullGetSegmentT0(iSegment: i)
                 let t1 = context.fullGetSegmentT1(iSegment: i)
                 text += String(format: "[%.1f->%.1f] ", Float(t0) / 100.0, Float(t1) / 100.0)
+                text += segmentText + "\n"
+            } else {
+                // Segments are arbitrary decoder chunks, not sentences, so joining
+                // them with a newline would break continuous speech across lines.
+                // Whisper's segment text already carries its own leading space.
+                text += segmentText
             }
-            text += segmentText + "\n"
         }
         
-        let cleanedText = text
+        var cleanedText = text
             .replacingOccurrences(of: "[MUSIC]", with: "")
             .replacingOccurrences(of: "[BLANK_AUDIO]", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !settings.showTimestamps {
+            // Stripped annotations and segment-edge spaces can leave double spaces.
+            cleanedText = cleanedText.replacingOccurrences(
+                of: "[ \t]{2,}", with: " ", options: .regularExpression
+            )
+        }
         
         var processedText = cleanedText
         if settings.shouldApplyAsianAutocorrect && !cleanedText.isEmpty {
