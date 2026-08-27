@@ -29,6 +29,7 @@ struct OpenSuperWhisperApp: App {
             }
             .frame(minHeight: 480, maxHeight: 1000)
             .environmentObject(appState)
+            .themedWindow()
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 980, height: 660)
@@ -89,7 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var microphoneObserver: AnyCancellable?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        
+
+        // Before any window is shown, so the title bar doesn't flash the wrong
+        // appearance on launch.
+        ThemeManager.shared.start()
+
         setupStatusBarItem()
         
         if let window = NSApplication.shared.windows.first {

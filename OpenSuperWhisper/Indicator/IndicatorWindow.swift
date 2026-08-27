@@ -336,23 +336,17 @@ class IndicatorViewModel: ObservableObject {
 }
 
 struct RecordingIndicator: View {
-    var tint: Color = .red
+    var tint: Color
     @State private var pulsing = false
 
     var body: some View {
         Circle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        tint.opacity(0.85),
-                        tint
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+            .fill(tint)
+            .frame(width: 7, height: 7)
+            .overlay(
+                Circle()
+                    .stroke(tint.opacity(0.25), lineWidth: 4)
             )
-            .frame(width: 9, height: 9)
-            .shadow(color: tint.opacity(0.7), radius: 5)
             .opacity(pulsing ? 0.25 : 1.0)
             .animation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true), value: pulsing)
             .onAppear { pulsing = true }
@@ -362,7 +356,7 @@ struct RecordingIndicator: View {
 /// A small animated bar meter reflecting live microphone input level.
 struct LevelMeter: View {
     @ObservedObject var recorder: AudioRecorder
-    var tint: Color = .red
+    var tint: Color
 
     private let weights: [CGFloat] = [0.5, 0.78, 1.0, 0.78, 0.5]
 
@@ -388,9 +382,7 @@ struct LevelMeter: View {
 
 struct IndicatorWindow: View {
     @ObservedObject var viewModel: IndicatorViewModel
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var style: IndicatorStyle { IndicatorStyle.current }
+    @Environment(\.palette) private var palette
 
     /// Measured height of the live transcript block, used to grow the pill.
     @State private var liveTextHeight: CGFloat = 0
@@ -410,7 +402,10 @@ struct IndicatorWindow: View {
 
     var body: some View {
 
-        let rect = RoundedRectangle(cornerRadius: style.cornerRadius)
+        // One-line states are a capsule, as in the design; once the live
+        // transcript wraps, a capsule would bow out absurdly, so the tall pill
+        // falls back to a generous rounded rect.
+        let rect = RoundedRectangle(cornerRadius: isWideContent ? 18 : 999)
 
         VStack(spacing: 12) {
             switch viewModel.state {
@@ -429,7 +424,7 @@ struct IndicatorWindow: View {
                 // The pulsing red dot already signals "recording", so we drop the
                 // word to keep the pill on one line: dot · timer · level meter.
                 HStack(spacing: 8) {
-                    RecordingIndicator(tint: style.accent)
+                    RecordingIndicator(tint: palette.live)
 
                     Text(viewModel.elapsedString)
                         .font(.system(size: 13, weight: .semibold))
@@ -438,7 +433,7 @@ struct IndicatorWindow: View {
 
                     Spacer(minLength: 6)
 
-                    LevelMeter(recorder: viewModel.recorder, tint: style.accent)
+                    LevelMeter(recorder: viewModel.recorder, tint: palette.pillBar)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
@@ -455,7 +450,7 @@ struct IndicatorWindow: View {
                         ScrollView(.vertical) {
                             Text(viewModel.partialText)
                                 .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+                                .foregroundColor(palette.pillText.opacity(0.7))
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -493,26 +488,27 @@ struct IndicatorWindow: View {
             case .busy:
                 HStack(spacing: 8) {
                     Image(systemName: "hourglass")
-                        .foregroundColor(.orange)
                         .frame(width: 24)
-                    
+
                     Text("Processing...")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.orange)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                
+
             case .notice:
+                // Errors are the one case that earns colour; plain notices stay
+                // in the pill's own text colour.
+                let noticeColor = viewModel.noticeIsError ? palette.danger : palette.pillText
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: viewModel.noticeIsError
                           ? "exclamationmark.triangle.fill"
                           : "info.circle.fill")
-                        .foregroundColor(viewModel.noticeIsError ? .red : .orange)
+                        .foregroundColor(noticeColor)
                         .frame(width: 24)
 
                     Text(viewModel.noticeMessage)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(viewModel.noticeIsError ? .red : .orange)
+                        .foregroundColor(noticeColor)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -523,24 +519,16 @@ struct IndicatorWindow: View {
                 EmptyView()
             }
         }
-        .foregroundColor(style.textColor)
+        .foregroundColor(palette.pillText)
+        .tint(palette.pillText)
         .padding(.horizontal, 24)
         .padding(.vertical, isWideContent ? 10 : 0)
-        .frame(minHeight: 36)
+        .frame(minHeight: 40)
         .background {
             rect
-                .fill(style.fillColor(colorScheme))
-                .background {
-                    if style.usesMaterial {
-                        rect.fill(Material.thinMaterial)
-                    }
-                }
-                .overlay {
-                    if let stroke = style.strokeColor {
-                        rect.stroke(stroke, lineWidth: 1.5)
-                    }
-                }
-                .shadow(color: .black.opacity(style.shadowOpacity), radius: 10, x: 0, y: 4)
+                .fill(palette.pillFill)
+                .overlay { rect.stroke(palette.pillBorder, lineWidth: 1) }
+                .shadow(color: .black.opacity(palette.pillShadowOpacity), radius: 12, x: 0, y: 5)
         }
         .clipShape(rect)
         .frame(width: isWideContent ? 340 : 200)

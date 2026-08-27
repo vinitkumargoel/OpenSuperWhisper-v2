@@ -185,12 +185,6 @@ class SettingsViewModel: ObservableObject {
         }
     }
 
-    @Published var indicatorStyle: IndicatorStyle {
-        didSet {
-            AppPreferences.shared.indicatorStyle = indicatorStyle.rawValue
-        }
-    }
-
     private var isRevertingLaunchAtLogin = false
 
     @Published var launchAtLogin: Bool {
@@ -460,7 +454,6 @@ class SettingsViewModel: ObservableObject {
         self.dictationCommandsEnabled = prefs.dictationCommandsEnabled
         self.historyRetentionDays = prefs.historyRetentionDays
         self.indicatorPosition = IndicatorPosition(rawValue: prefs.indicatorPosition) ?? .nearCursor
-        self.indicatorStyle = IndicatorStyle(rawValue: prefs.indicatorStyle) ?? .classic
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.formattingEnabled = prefs.formattingEnabled
         self.llmBaseURL = prefs.llmBaseURL
@@ -858,23 +851,6 @@ struct Settings {
     }
 }
 
-enum SettingsTheme {
-    /// Primary brand accent used across the settings UI.
-    static let accent = Color(red: 0.40, green: 0.36, blue: 0.92)
-
-    static let accentGradient = LinearGradient(
-        colors: [
-            Color(red: 0.42, green: 0.40, blue: 0.96),
-            Color(red: 0.58, green: 0.36, blue: 0.92)
-        ],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-
-    static var sidebarBackground: Color {
-        Color(.controlBackgroundColor).opacity(0.5)
-    }
-}
 
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
@@ -882,6 +858,8 @@ struct SettingsView: View {
     // Observed, not just referenced: the download card reads its progress and
     // install state, and a plain `let manager = .shared` never redraws.
     @ObservedObject private var s1Manager = S1MiniModelManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
+    @Environment(\.palette) private var palette
     @Environment(\.dismiss) var dismiss
     @State private var isRecordingNewShortcut = false
     @State private var selectedTab = 0
@@ -901,21 +879,22 @@ struct SettingsView: View {
         .init(id: 3, title: "Formatting", icon: "wand.and.stars"),
         .init(id: 4, title: "Analytics", icon: "chart.bar.xaxis"),
         .init(id: 5, title: "Audio", icon: "mic"),
-        .init(id: 6, title: "Advanced", icon: "gear"),
+        .init(id: 6, title: "Appearance", icon: "paintpalette"),
+        .init(id: 7, title: "Advanced", icon: "gear"),
     ]
 
     var body: some View {
         HStack(spacing: 0) {
             settingsSidebar
 
-            Divider()
+            Rectangle().fill(palette.hairline).frame(width: 1)
 
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color(.windowBackgroundColor))
+                .background(palette.detailBackground)
         }
         .frame(width: 840, height: 640)
-        .background(Color(.windowBackgroundColor))
+        .background(palette.windowBackground)
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Button("Done") {
@@ -926,11 +905,10 @@ struct SettingsView: View {
                     }
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                
+                .buttonStyle(FilledButtonStyle(height: 30))
+
                 Spacer()
-                
+
                 Link(destination: URL(string: "https://github.com/vinitkumargoel/OpenSuperWhisper-v2")!) {
                     HStack(spacing: 4) {
                         Image(systemName: "star")
@@ -938,13 +916,17 @@ struct SettingsView: View {
                         Text("GitHub")
                             .font(.system(size: 11))
                     }
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textQuaternary)
                 }
                 .buttonStyle(.plain)
             }
             .padding()
-            .background(Color(.windowBackgroundColor))
+            .background(palette.windowBackground)
+            .overlay(alignment: .top) {
+                Rectangle().fill(palette.hairline).frame(height: 1)
+            }
         }
+        .themedWindow()
         .onAppear {
             previousModelURL = viewModel.selectedModelURL
             if viewModel.selectedEngine == "fluidaudio" {
@@ -974,16 +956,12 @@ struct SettingsView: View {
 
     private var settingsSidebar: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(SettingsTheme.accentGradient)
-                Text("Settings")
-                    .font(.system(size: 15, weight: .bold))
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
+            Text("Settings")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(palette.textPrimary)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 14)
 
             ForEach(Self.tabs) { tab in
                 sidebarRow(tab)
@@ -991,9 +969,9 @@ struct SettingsView: View {
 
             Spacer()
         }
-        .frame(width: 208)
+        .frame(width: 196)
         .frame(maxHeight: .infinity)
-        .background(SettingsTheme.sidebarBackground)
+        .background(palette.railBackground)
     }
 
     private func sidebarRow(_ tab: SettingsTabInfo) -> some View {
@@ -1003,25 +981,21 @@ struct SettingsView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : SettingsTheme.accent)
-                    .frame(width: 22, height: 22)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(isSelected ? AnyShapeStyle(SettingsTheme.accentGradient) : AnyShapeStyle(SettingsTheme.accent.opacity(0.12)))
-                    )
+                    .font(.system(size: 12.5))
+                    .frame(width: 16)
+                    .foregroundColor(isSelected ? palette.selectionText : palette.textTertiary)
 
                 Text(tab.title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundColor(isSelected ? palette.selectionText : palette.textSecondary)
 
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 9)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? SettingsTheme.accent.opacity(0.12) : Color.clear)
+                RoundedRectangle(cornerRadius: palette.radiusSmall)
+                    .fill(isSelected ? palette.selectionFill : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -1038,7 +1012,56 @@ struct SettingsView: View {
         case 3: formattingSettings
         case 4: analyticsSettings
         case 5: audioSettings
+        case 6: appearanceSettings
         default: advancedSettings
+        }
+    }
+
+    // MARK: - Appearance
+
+    private var appearanceSettings: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Appearance")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundColor(palette.textPrimary)
+                Text("Every colour in the app comes from the selected theme, including the floating indicator.")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(palette.textQuaternary)
+                    .padding(.top, 3)
+                    .padding(.bottom, 18)
+
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12)
+                ], spacing: 12) {
+                    ForEach(AppTheme.allCases) { theme in
+                        ThemeCard(
+                            theme: theme,
+                            isSelected: themeManager.theme == theme,
+                            systemScheme: themeManager.systemScheme
+                        ) {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                themeManager.theme = theme
+                            }
+                        }
+                    }
+                }
+
+                // Obsidian and Signal are built on near-black; saying so up front
+                // is better than the user wondering why the toggle did nothing.
+                Text(themeManager.theme.followsSystemAppearance
+                     ? "Graphite follows your macOS appearance setting."
+                     : "\(themeManager.theme.displayName) is a dark-only theme, so the app stays dark regardless of your macOS appearance setting.")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(palette.textQuaternary)
+                    .padding(.top, 14)
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
     }
 
@@ -1053,7 +1076,7 @@ struct SettingsView: View {
 
                     Text("Typing estimate: 40 wpm")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
 
                     Button {
                         viewModel.refreshAnalytics()
@@ -1152,7 +1175,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Input Device")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -1190,11 +1213,11 @@ struct SettingsView: View {
                         if microphoneService.availableMicrophones.isEmpty {
                             Text("No microphones available")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         } else if let currentMicrophone = microphoneService.currentMicrophone {
                             Text("Active: \(currentMicrophone.displayName)")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         }
 
                         Button {
@@ -1224,7 +1247,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("AI Auto Format")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top) {
@@ -1233,11 +1256,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("After transcription, an LLM corrects grammar and formatting before the text is saved and pasted.")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.formattingEnabled)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
 
@@ -1251,7 +1274,7 @@ struct SettingsView: View {
 
                         Text(viewModel.formattingBackend.subtitle)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
 
                         if viewModel.formattingBackend == .s1mini {
                             onDeviceFormattingSection
@@ -1286,7 +1309,7 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                             Text("Any OpenAI-compatible endpoint: OpenAI, OpenRouter, Groq, Ollama (http://localhost:11434/v1), LM Studio, ...")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -1296,7 +1319,7 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                             Text("Leave empty for local servers that don't need a key.")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -1328,15 +1351,15 @@ struct SettingsView: View {
                             if let fetchError = viewModel.llmModelsFetchError {
                                 Text(fetchError)
                                     .font(.caption)
-                                    .foregroundColor(.red)
+                                    .foregroundColor(palette.danger)
                             } else if !viewModel.availableLLMModels.isEmpty {
                                 Text("\(viewModel.availableLLMModels.count) models available from this endpoint.")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             } else {
                                 Text("Type a model id, or fetch the endpoint's model list and pick from it.")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                         }
         }
@@ -1353,14 +1376,14 @@ struct SettingsView: View {
                     .font(.subheadline)
                 Text("S1-mini's system prompt is fixed by its training, so these three settings are how you steer it. Formatting Modes can override them per app.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
 
                 Picker("Styling", selection: $viewModel.s1DefaultStyling) {
                     ForEach(S1Styling.allCases) { Text($0.title).tag($0) }
                 }
                 Text(viewModel.s1DefaultStyling.detail)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
 
                 Picker("Structure", selection: $viewModel.s1DefaultStructure) {
                     ForEach(S1Structure.allCases) { Text($0.title).tag($0) }
@@ -1372,7 +1395,7 @@ struct SettingsView: View {
 
             Text("S1-mini by Superwhisper — English only, and it normalizes rather than rewrites. Keep the API backend selected for modes that need a real prompt.")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
         }
     }
 
@@ -1392,7 +1415,7 @@ struct SettingsView: View {
                          ? "Installed — \(ByteCountFormatter.string(fromByteCount: manager.installedBytes(variant), countStyle: .file))"
                          : "Not downloaded — \(ByteCountFormatter.string(fromByteCount: variant.approximateBytes, countStyle: .file))")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                 }
                 Spacer()
                 if manager.isDownloading {
@@ -1418,14 +1441,14 @@ struct SettingsView: View {
                     ProgressView(value: manager.downloadProgress)
                     Text("\(manager.downloadingFile) — \(Int(manager.downloadProgress * 100))%")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                 }
             }
 
             if let error = manager.lastError {
                 Text(error)
                     .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundColor(palette.danger)
             }
         }
         .padding(12)
@@ -1447,11 +1470,11 @@ struct SettingsView: View {
                             .font(.subheadline)
                         Text("Loading takes a second or two. Doing it while you are still speaking means you never wait for it afterwards.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                     }
                     Spacer()
                     Toggle("", isOn: $viewModel.prewarmModelsOnRecord)
-                        .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                        .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                         .labelsHidden()
                 }
 
@@ -1467,13 +1490,13 @@ struct SettingsView: View {
                          ? "Lowest memory: the transcription model is released before formatting starts, so the two never occupy memory at once."
                          : "Back-to-back dictation reuses the loaded models instead of reloading them.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                 }
 
                 HStack {
                     Text(viewModel.residencySummary.isEmpty ? "—" : viewModel.residencySummary)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                     Spacer()
                     Button("Refresh") {
                         Task { await viewModel.refreshResidency() }
@@ -1501,7 +1524,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Runs the text below through the selected backend, exactly as a finished transcript would go.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
 
                 TextEditor(text: $viewModel.testInput)
                     .font(.system(size: 12, design: .monospaced))
@@ -1520,7 +1543,7 @@ struct SettingsView: View {
                     if !viewModel.testDuration.isEmpty {
                         Text(viewModel.testDuration)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                     }
                     Spacer()
                 }
@@ -1528,7 +1551,7 @@ struct SettingsView: View {
                 if let error = viewModel.testError {
                     Text(error)
                         .font(.caption)
-                        .foregroundColor(.red)
+                        .foregroundColor(palette.danger)
                         .textSelection(.enabled)
                 } else if !viewModel.testOutput.isEmpty {
                     Text(viewModel.testOutput)
@@ -1552,7 +1575,7 @@ struct SettingsView: View {
             HStack {
                 Text("Formatting Modes")
                     .font(.headline)
-                    .foregroundColor(.primary)
+                    .foregroundColor(palette.textPrimary)
                 Spacer()
                 Button {
                     viewModel.addFormattingMode()
@@ -1564,7 +1587,7 @@ struct SettingsView: View {
 
             Text("Presets with their own prompt. Optionally auto-select a mode based on the app you're dictating into.")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
 
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1572,11 +1595,11 @@ struct SettingsView: View {
                         .font(.subheadline)
                     Text("Uses the mode whose app list matches the app that was frontmost when recording started. Otherwise the active mode below is used.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                 }
                 Spacer()
                 Toggle("", isOn: $viewModel.autoSwitchFormattingMode)
-                    .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                    .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                     .labelsHidden()
             }
 
@@ -1634,7 +1657,7 @@ struct SettingsView: View {
                 .textFieldStyle(.roundedBorder)
                 Text("Comma-separated app bundle IDs. Used only when auto-switch is on.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -1642,7 +1665,7 @@ struct SettingsView: View {
                     .font(.subheadline)
                 Text("Used when the on-device backend is selected. S1-mini cannot read the prompt below — these are its only controls.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
 
                 Picker("Styling", selection: Binding(
                     get: { mode.wrappedValue.styling ?? viewModel.s1DefaultStyling },
@@ -1669,7 +1692,7 @@ struct SettingsView: View {
                     .font(.subheadline)
                 Text("Used by the API backend.")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                 TextEditor(text: mode.prompt)
                     .font(.system(.body, design: .monospaced))
                     .frame(height: 100)
@@ -1678,7 +1701,7 @@ struct SettingsView: View {
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                            .stroke(palette.hairline, lineWidth: 1)
                     )
             }
 
@@ -1708,7 +1731,7 @@ struct SettingsView: View {
             HStack {
                 Text("Custom Vocabulary")
                     .font(.headline)
-                    .foregroundColor(.primary)
+                    .foregroundColor(palette.textPrimary)
                 Spacer()
                 Button {
                     viewModel.addVocabularyRule()
@@ -1720,19 +1743,19 @@ struct SettingsView: View {
 
             Text("Fix names, jargon, and acronyms the model mishears. Applied after transcription — even when AI formatting is off.")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
 
             if viewModel.vocabularyRules.isEmpty {
                 Text("No replacements yet. Add one to correct terms like \"clod code\" → \"Claude Code\".")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 6)
             } else {
                 HStack(spacing: 8) {
-                    Text("Heard").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Replace with").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Aa").font(.caption).foregroundColor(.secondary).frame(width: 30)
+                    Text("Heard").font(.caption).foregroundColor(palette.textTertiary).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Replace with").font(.caption).foregroundColor(palette.textTertiary).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Aa").font(.caption).foregroundColor(palette.textTertiary).frame(width: 30)
                     Spacer().frame(width: 24)
                 }
 
@@ -1753,7 +1776,7 @@ struct SettingsView: View {
                             viewModel.deleteVocabularyRule(rule.id)
                         } label: {
                             Image(systemName: "trash")
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         }
                         .buttonStyle(.plain)
                         .frame(width: 24)
@@ -1773,7 +1796,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Speech Recognition Engine")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     Picker("Engine", selection: $viewModel.selectedEngine) {
                         Text("Parakeet").tag("fluidaudio")
@@ -1786,11 +1809,11 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Whisper Model")
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             
                             Text("Download Models")
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                                 .padding(.top, 8)
                             
                             ScrollView {
@@ -1824,7 +1847,7 @@ struct SettingsView: View {
                                     if let downloadingName = viewModel.downloadingModelName {
                                         Text("Downloading: \(downloadingName)")
                                             .font(.caption)
-                                            .foregroundColor(.secondary)
+                                            .foregroundColor(palette.textTertiary)
                                     }
                                 }
                                 .padding(.top, 8)
@@ -1845,7 +1868,7 @@ struct SettingsView: View {
                                 }
                                 Text(WhisperModelManager.shared.modelsDirectory.path)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                                     .textSelection(.enabled)
                                     .padding(8)
                                     .background(Color(.textBackgroundColor).opacity(0.5))
@@ -1857,11 +1880,11 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Parakeet Model")
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                             
                             Text("Download Models")
                                 .font(.headline)
-                                .foregroundColor(.primary)
+                                .foregroundColor(palette.textPrimary)
                                 .padding(.top, 8)
                             
                             ScrollView {
@@ -1895,7 +1918,7 @@ struct SettingsView: View {
                                     if let downloadingName = viewModel.downloadingModelName {
                                         Text("Downloading: \(downloadingName)")
                                             .font(.caption)
-                                            .foregroundColor(.secondary)
+                                            .foregroundColor(palette.textTertiary)
                                     }
                                 }
                                 .padding(.top, 8)
@@ -1918,7 +1941,7 @@ struct SettingsView: View {
                                 }
                                 Text(AsrModels.defaultCacheDirectory(for: .v3).deletingLastPathComponent().path)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                                     .textSelection(.enabled)
                                     .padding(8)
                                     .background(Color(.textBackgroundColor).opacity(0.5))
@@ -1944,7 +1967,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Language Settings")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Transcription Language")
@@ -1968,7 +1991,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.translateToEnglish)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
                         .padding(.top, 4)
@@ -1979,7 +2002,7 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Spacer()
                                 Toggle("", isOn: $viewModel.useAsianAutocorrect)
-                                    .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                    .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                     .labelsHidden()
                             }
                             .padding(.top, 4)
@@ -1995,7 +2018,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Output Options")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -2003,7 +2026,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.showTimestamps)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
                         
@@ -2012,7 +2035,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.suppressBlankAudio)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
                         
@@ -2022,11 +2045,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Appends a space when transcription ends with punctuation")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.addSpaceAfterSentence)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
 
@@ -2036,11 +2059,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("When off — or if Accessibility isn't granted — text is copied to the clipboard instead")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.autoPasteEnabled)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
 
@@ -2050,11 +2073,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Leave the transcript on the clipboard after pasting instead of restoring what was there before")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.keepTranscriptOnClipboard)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
 
@@ -2064,11 +2087,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Turns words like \u{201C}period\u{201D} and \u{201C}new line\u{201D} into punctuation. Supports: \(DictationCommandProcessor.supportedSummary)")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.dictationCommandsEnabled)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
                     }
@@ -2082,7 +2105,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Initial Prompt")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 8) {
                         TextEditor(text: $viewModel.initialPrompt)
@@ -2092,12 +2115,12 @@ struct SettingsView: View {
                             .cornerRadius(8)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                                    .stroke(palette.hairline, lineWidth: 1)
                             )
                         
                         Text("Optional text to guide the model's transcription")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                     }
                 }
                 .padding()
@@ -2109,7 +2132,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Transcriptions Directory")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -2128,7 +2151,7 @@ struct SettingsView: View {
                         
                         Text(Recording.recordingsDirectory.path)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                             .textSelection(.enabled)
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2152,7 +2175,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Decoding Strategy")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -2160,7 +2183,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.useBeamSearch)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                                 .help("Beam search can provide better results but is slower")
                         }
@@ -2186,7 +2209,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Model Parameters")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 14) {
                         VStack(alignment: .leading, spacing: 6) {
@@ -2196,7 +2219,7 @@ struct SettingsView: View {
                                 Spacer()
                                 Text(String(format: "%.2f", viewModel.temperature))
                                     .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             
                             Slider(value: $viewModel.temperature, in: 0.0...1.0, step: 0.1)
@@ -2210,7 +2233,7 @@ struct SettingsView: View {
                                 Spacer()
                                 Text(String(format: "%.2f", viewModel.noSpeechThreshold))
                                     .font(.subheadline)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             
                             Slider(value: $viewModel.noSpeechThreshold, in: 0.0...1.0, step: 0.1)
@@ -2227,14 +2250,14 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Debug Options")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     HStack {
                         Text("Debug Mode")
                             .font(.subheadline)
                         Spacer()
                         Toggle("", isOn: $viewModel.debugMode)
-                            .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                            .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                             .labelsHidden()
                             .help("Enable additional logging and debugging information")
                     }
@@ -2259,7 +2282,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Recording Trigger")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 16) {
                         Picker("", selection: Binding(
@@ -2298,7 +2321,7 @@ struct SettingsView: View {
                                 
                                 Text("One-tap to toggle recording")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 8) {
@@ -2316,7 +2339,7 @@ struct SettingsView: View {
                                 
                                 if isRecordingNewShortcut {
                                     Text("Press your new shortcut combination...")
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(palette.textTertiary)
                                         .font(.subheadline)
                                 }
                             }
@@ -2332,7 +2355,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Recording Behavior")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
                     
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -2341,11 +2364,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Hold the shortcut to record, release to stop")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.holdToRecord)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
                         
@@ -2354,7 +2377,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.playSoundOnRecordStart)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                                 .help("Play a notification sound when recording begins")
                         }
@@ -2364,7 +2387,7 @@ struct SettingsView: View {
                                 .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $viewModel.pauseMediaDuringRecording)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                                 .help("Set system output volume to 0 when recording starts and restore it when recording stops")
                         }
@@ -2375,11 +2398,11 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Start OpenSuperWhisper automatically when you log in")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Toggle("", isOn: $viewModel.launchAtLogin)
-                                .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                                .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                                 .labelsHidden()
                         }
 
@@ -2389,7 +2412,7 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Removes completed, non-starred recordings older than the chosen age")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Picker("", selection: $viewModel.historyRetentionDays) {
@@ -2413,7 +2436,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Recording Indicator")
                         .font(.headline)
-                        .foregroundColor(.primary)
+                        .foregroundColor(palette.textPrimary)
 
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -2422,7 +2445,7 @@ struct SettingsView: View {
                                     .font(.subheadline)
                                 Text("Where the floating indicator appears, or hide it entirely")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(palette.textTertiary)
                             }
                             Spacer()
                             Picker("", selection: $viewModel.indicatorPosition) {
@@ -2435,29 +2458,6 @@ struct SettingsView: View {
                             .frame(width: 180)
                         }
 
-                        Divider()
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Template")
-                                .font(.subheadline)
-                            Text("Choose how the floating indicator looks")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            LazyVGrid(columns: [
-                                GridItem(.flexible(), spacing: 10),
-                                GridItem(.flexible(), spacing: 10),
-                                GridItem(.flexible(), spacing: 10)
-                            ], spacing: 10) {
-                                ForEach(IndicatorStyle.allCases) { style in
-                                    IndicatorStylePreview(style: style, isSelected: viewModel.indicatorStyle == style)
-                                        .onTapGesture {
-                                            viewModel.indicatorStyle = style
-                                        }
-                                }
-                            }
-                            .padding(.top, 4)
-                        }
                     }
                 }
                 .padding()
@@ -2555,6 +2555,7 @@ struct OnboardingUnifiedModels {
 }
 
 struct FluidAudioModelDownloadItemView: View {
+    @Environment(\.palette) private var palette
     @Binding var model: SettingsFluidAudioModel
     @ObservedObject var viewModel: SettingsViewModel
     @State private var showError = false
@@ -2574,14 +2575,14 @@ struct FluidAudioModelDownloadItemView: View {
                     
                     if model.isDownloaded {
                         Image(systemName: "arrow.down.circle.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.textTertiary)
                             .imageScale(.small)
                     }
                 }
                 
                 Text(model.description)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                 
                 if viewModel.isDownloading && viewModel.downloadingModelName == model.name {
                     ProgressView()
@@ -2607,7 +2608,7 @@ struct FluidAudioModelDownloadItemView: View {
             } else if model.isDownloaded {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                        .foregroundColor(palette.accent)
                         .imageScale(.large)
                 } else {
                     Button(action: {
@@ -2656,6 +2657,7 @@ struct FluidAudioModelDownloadItemView: View {
 }
 
 struct AnalyticsMetricCard: View {
+    @Environment(\.palette) private var palette
     let title: String
     let value: String
     let detail: String
@@ -2664,18 +2666,18 @@ struct AnalyticsMetricCard: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
                 .lineLimit(1)
 
             Text(value)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundColor(.primary)
+                .foregroundColor(palette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
 
             Text(detail)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 8)
@@ -2714,10 +2716,10 @@ struct AnalyticsActivitySection: View {
                 .frame(height: 150)
 
             HStack(spacing: 8) {
-                AnalyticsSummaryChip(title: "Words", value: summary.words.formatted(.number), tint: SettingsTheme.accent)
-                AnalyticsSummaryChip(title: "Recordings", value: summary.recordings.formatted(.number), tint: SettingsTheme.accent)
-                AnalyticsSummaryChip(title: "Time Saved", value: TextUtil.formatDuration(summary.estimatedTimeSaved), tint: SettingsTheme.accent)
-                AnalyticsSummaryChip(title: "Active Days", value: "\(summary.activeDays)/\(range.days)", tint: SettingsTheme.accent)
+                AnalyticsSummaryChip(title: "Words", value: summary.words.formatted(.number))
+                AnalyticsSummaryChip(title: "Recordings", value: summary.recordings.formatted(.number))
+                AnalyticsSummaryChip(title: "Time Saved", value: TextUtil.formatDuration(summary.estimatedTimeSaved))
+                AnalyticsSummaryChip(title: "Active Days", value: "\(summary.activeDays)/\(range.days)")
             }
         }
         .padding(12)
@@ -2729,6 +2731,7 @@ struct AnalyticsActivitySection: View {
 struct AnalyticsActivityChart: View {
     let series: [AnalyticsDay]
     let range: AnalyticsRange
+    @Environment(\.palette) private var palette
 
     private var hasData: Bool { series.contains { $0.words > 0 } }
 
@@ -2743,12 +2746,12 @@ struct AnalyticsActivityChart: View {
 
     var body: some View {
         if !hasData {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color(.textBackgroundColor).opacity(0.35))
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .fill(palette.groupBackground)
                 .overlay(
                     Text("No activity in this range yet")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textQuaternary)
                 )
         } else {
             Chart(series) { day in
@@ -2756,7 +2759,7 @@ struct AnalyticsActivityChart: View {
                     x: .value("Date", day.date, unit: .day),
                     y: .value("Words", day.words)
                 )
-                .foregroundStyle(SettingsTheme.accentGradient)
+                .foregroundStyle(palette.accent)
                 .cornerRadius(range == .quarter ? 1.5 : 3)
             }
             .chartXAxis {
@@ -2780,29 +2783,31 @@ struct AnalyticsActivityChart: View {
 struct AnalyticsSummaryChip: View {
     let title: String
     let value: String
-    let tint: Color
+    @Environment(\.palette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textQuaternary)
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundColor(tint)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(palette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.textBackgroundColor).opacity(0.5))
-        .cornerRadius(8)
+        .background(palette.ghostFill)
+        .overlay(RoundedRectangle(cornerRadius: palette.radiusControl).stroke(palette.ghostBorder, lineWidth: 1))
+        .cornerRadius(palette.radiusControl)
     }
 }
 
 struct ModelDownloadItemView: View {
+    @Environment(\.palette) private var palette
     @Binding var model: SettingsDownloadableModel
     @ObservedObject var viewModel: SettingsViewModel
     @State private var showError = false
@@ -2826,14 +2831,14 @@ struct ModelDownloadItemView: View {
                     
                     if model.isDownloaded {
                         Image(systemName: "arrow.down.circle.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.textTertiary)
                             .imageScale(.small)
                     }
                 }
                 
                 Text(model.description)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                 
                 if model.downloadProgress > 0 && model.downloadProgress < 1 {
                     ProgressView(value: model.downloadProgress)
@@ -2854,7 +2859,7 @@ struct ModelDownloadItemView: View {
             } else if model.isDownloaded {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                        .foregroundColor(palette.accent)
                         .imageScale(.large)
                 } else {
                     Button(action: {

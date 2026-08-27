@@ -310,6 +310,7 @@ class OnboardingViewModel: ObservableObject {
 }
 
 struct OnboardingView: View {
+    @Environment(\.palette) private var palette
     @StateObject private var viewModel = OnboardingViewModel()
     @EnvironmentObject private var appState: AppState
     @State private var showError = false
@@ -325,7 +326,7 @@ struct OnboardingView: View {
                     Text("Welcome to")
                         .font(.title2)
                         .fontWeight(.medium)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                     
                     Text("OpenSuperWhisper")
                         .font(.system(size: 32, weight: .bold))
@@ -353,21 +354,13 @@ struct OnboardingView: View {
                         Text("Use Asian Autocorrect")
                             .font(.caption)
                     }
-                    .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                    .toggleStyle(SwitchToggleStyle(tint: palette.accent))
                 }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.05),
-                        Color.white.opacity(0.03),
-                        Color.clear
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
+                palette.groupBackground
             )
             
             Divider()
@@ -383,7 +376,7 @@ struct OnboardingView: View {
                         
                         Text("Choose how to trigger recording")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                         
                         if let layoutInfo = keyboardLayoutInfo {
                             OnboardingKeyboardView(selectedShortcut: viewModel.selectedShortcut, layoutInfo: layoutInfo)
@@ -409,7 +402,7 @@ struct OnboardingView: View {
                         
                         Text("You can change this later in Settings")
                             .font(.caption2)
-                            .foregroundColor(Color(.tertiaryLabelColor))
+                            .foregroundColor(palette.textQuaternary)
                     }
                     
                     // Model Selection
@@ -420,7 +413,7 @@ struct OnboardingView: View {
                         
                         Text("Download a model to get started")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                         
                         VStack(spacing: 8) {
                             ForEach($viewModel.unifiedModels) { $model in
@@ -455,22 +448,7 @@ struct OnboardingView: View {
             .padding(16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            ZStack {
-                Color(.windowBackgroundColor)
-                
-                // Subtle gradient overlay
-                LinearGradient(
-                    colors: [
-                        Color.blue.opacity(0.02),
-                        Color.clear,
-                        Color.purple.opacity(0.02)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        )
+        .background(palette.windowBackground)
         .alert("Download Error", isPresented: $showError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -484,6 +462,7 @@ struct OnboardingView: View {
 }
 
 struct OnboardingUnifiedModelItemView: View {
+    @Environment(\.palette) private var palette
     @Binding var model: OnboardingUnifiedModel
     @ObservedObject var viewModel: OnboardingViewModel
     @State private var showError = false
@@ -508,14 +487,14 @@ struct OnboardingUnifiedModelItemView: View {
                     
                     if model.isDownloaded {
                         Image(systemName: "arrow.down.circle.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(palette.textTertiary)
                             .imageScale(.small)
                     }
                 }
                 
                 Text(model.description)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                 
                 if viewModel.isDownloading && viewModel.downloadingModelName == model.name && isParakeet {
                     ProgressView()
@@ -541,7 +520,7 @@ struct OnboardingUnifiedModelItemView: View {
             } else if model.isDownloaded {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                        .foregroundColor(palette.accent)
                         .imageScale(.large)
                 } else {
                     Button(action: {
@@ -574,13 +553,12 @@ struct OnboardingUnifiedModelItemView: View {
         }
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? Color(.controlBackgroundColor).opacity(0.8) : Color(.controlBackgroundColor).opacity(0.5))
-                .shadow(color: isSelected ? Color.blue.opacity(0.2) : Color.black.opacity(0.05), radius: isSelected ? 8 : 4, x: 0, y: 2)
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .fill(isSelected ? palette.cardSelectedFill : palette.groupBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(isSelected ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .stroke(isSelected ? palette.cardSelectedBorder : palette.hairline, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -601,7 +579,8 @@ private struct KeyCap: View {
     let w: CGFloat
     let h: CGFloat
     let highlighted: Bool
-    
+    @Environment(\.palette) private var palette
+
     var body: some View {
         Text(label)
             .font(.system(size: w > 20 ? 9 : 7, weight: .medium))
@@ -610,17 +589,18 @@ private struct KeyCap: View {
             .frame(width: w, height: h)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(highlighted ? Color.accentColor.opacity(0.35) : Color(.controlBackgroundColor).opacity(0.5))
+                    .fill(highlighted ? palette.accent : palette.fieldFill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(highlighted ? Color.accentColor.opacity(0.7) : Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(highlighted ? Color.clear : palette.fieldBorder, lineWidth: 1)
             )
-            .foregroundColor(highlighted ? .white : .secondary)
+            .foregroundColor(highlighted ? palette.accentOn : palette.textTertiary)
     }
 }
 
 struct OnboardingKeyboardView: View {
+    @Environment(\.palette) private var palette
     let selectedShortcut: OnboardingShortcutOption
     let layoutInfo: KeyboardLayoutInfo
     
@@ -731,8 +711,8 @@ struct OnboardingKeyboardView: View {
         }
         .frame(height: heightForWidth(450 - 24))
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(.controlBackgroundColor).opacity(0.3))
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .fill(palette.groupBackground)
         )
         .animation(.easeInOut(duration: 0.2), value: selectedShortcut)
     }
@@ -744,6 +724,7 @@ struct OnboardingKeyboardView: View {
 }
 
 struct OnboardingShortcutCard: View {
+    @Environment(\.palette) private var palette
     let title: String
     let subtitle: String
     let isSelected: Bool
@@ -758,19 +739,18 @@ struct OnboardingShortcutCard: View {
                 
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .padding(.horizontal, 8)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? Color(.controlBackgroundColor).opacity(0.8) : Color(.controlBackgroundColor).opacity(0.5))
-                    .shadow(color: isSelected ? Color.blue.opacity(0.2) : Color.black.opacity(0.05), radius: isSelected ? 8 : 4, x: 0, y: 2)
+                RoundedRectangle(cornerRadius: palette.radiusCard)
+                    .fill(isSelected ? palette.cardSelectedFill : palette.groupBackground)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: palette.radiusCard)
+                    .stroke(isSelected ? palette.cardSelectedBorder : palette.hairline, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

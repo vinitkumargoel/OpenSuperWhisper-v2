@@ -350,7 +350,7 @@ class ContentViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var permissionsManager = PermissionsManager()
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
     @State private var isSettingsPresented = false
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
@@ -477,8 +477,8 @@ struct ContentView: View {
         HStack {
             Text(text.uppercased())
                 .font(.system(size: 10, weight: .bold))
-                .tracking(0.5)
-                .foregroundColor(.secondary.opacity(0.7))
+                .tracking(0.9)
+                .foregroundColor(palette.textQuaternary)
             Spacer()
         }
         .padding(.horizontal, 9)
@@ -490,15 +490,16 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(SettingsTheme.accentGradient)
-                        .frame(width: 28, height: 28)
+                    RoundedRectangle(cornerRadius: palette.radiusSmall)
+                        .fill(palette.brandMarkFill)
+                        .frame(width: 26, height: 26)
                     Image(systemName: "waveform")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.white)
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundColor(palette.brandMarkForeground)
                 }
                 Text("SuperWhisper")
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(palette.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -525,7 +526,7 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
-            Divider().padding(.vertical, 6)
+            Rectangle().fill(palette.hairline).frame(height: 1).padding(.vertical, 6)
 
             HStack(spacing: 8) {
                 MicrophonePickerIconView(microphoneService: viewModel.microphoneService)
@@ -537,12 +538,12 @@ struct ContentView: View {
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 14))
-                            .foregroundColor(SettingsTheme.accent)
+                            .font(.system(size: 13.5))
+                            .foregroundColor(palette.textTertiary)
                             .frame(width: 30, height: 30)
-                            .background(ThemePalette.panelSurface(colorScheme))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ThemePalette.panelBorder(colorScheme), lineWidth: 1))
-                            .cornerRadius(8)
+                            .background(palette.ghostFill)
+                            .overlay(RoundedRectangle(cornerRadius: palette.radiusSmall).stroke(palette.ghostBorder, lineWidth: 1))
+                            .cornerRadius(palette.radiusSmall)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -553,12 +554,12 @@ struct ContentView: View {
                         showDeleteConfirmation = true
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 14))
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 13.5))
+                            .foregroundColor(palette.textTertiary)
                             .frame(width: 30, height: 30)
-                            .background(ThemePalette.panelSurface(colorScheme))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(ThemePalette.panelBorder(colorScheme), lineWidth: 1))
-                            .cornerRadius(8)
+                            .background(palette.ghostFill)
+                            .overlay(RoundedRectangle(cornerRadius: palette.radiusSmall).stroke(palette.ghostBorder, lineWidth: 1))
+                            .cornerRadius(palette.radiusSmall)
                     }
                     .buttonStyle(.plain)
                     .help("Delete all recordings")
@@ -582,8 +583,8 @@ struct ContentView: View {
                 .padding(.top, 6)
         }
         .padding(10)
-        .frame(width: 178)
-        .background(ThemePalette.panelSurface(colorScheme))
+        .frame(width: 186)
+        .background(palette.railBackground)
     }
 
     private var railRecordButton: some View {
@@ -596,7 +597,7 @@ struct ContentView: View {
         } label: {
             HStack(spacing: 7) {
                 if viewModel.state == .decoding || viewModel.state == .formatting || viewModel.state == .connecting {
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(palette.buttonText)
                     Text("Working…")
                 } else if viewModel.isRecording {
                     Image(systemName: "stop.fill")
@@ -607,22 +608,13 @@ struct ContentView: View {
                 }
             }
             .font(.system(size: 12.5, weight: .semibold))
-            .foregroundColor(.white)
+            // While recording the button turns the one live colour; otherwise
+            // it is the theme's filled-button treatment.
+            .foregroundColor(viewModel.isRecording ? .white : palette.buttonText)
             .frame(maxWidth: .infinity)
-            .frame(height: 38)
-            .background(
-                Group {
-                    if viewModel.isRecording {
-                        LinearGradient(
-                            colors: [Color(red: 1, green: 0.37, blue: 0.43), Color(red: 1, green: 0.23, blue: 0.34)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-                    } else {
-                        SettingsTheme.accentGradient
-                    }
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .frame(height: 36)
+            .background(viewModel.isRecording ? palette.live : palette.buttonFill)
+            .clipShape(RoundedRectangle(cornerRadius: palette.radiusButton))
         }
         .buttonStyle(.plain)
         .disabled(viewModel.transcriptionService.isLoading || viewModel.transcriptionService.isTranscribing || viewModel.transcriptionQueue.isProcessing || viewModel.state == .decoding || viewModel.state == .formatting)
@@ -633,11 +625,12 @@ struct ContentView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13))
-                .foregroundColor(SettingsTheme.accent)
-            TextField("Search in transcriptions", text: $searchText)
+                .font(.system(size: 12.5))
+                .foregroundColor(palette.textQuaternary)
+            TextField("Search transcriptions", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
+                .foregroundColor(palette.textPrimary)
                 .onChange(of: searchText) { _, newValue in performSearch(newValue) }
             if !searchText.isEmpty {
                 Button {
@@ -646,16 +639,16 @@ struct ContentView: View {
                     searchTask?.cancel()
                     viewModel.search(query: "")
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    Image(systemName: "xmark.circle.fill").foregroundColor(palette.textQuaternary)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(ThemePalette.panelSurface(colorScheme))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(ThemePalette.panelBorder(colorScheme), lineWidth: 1))
-        .cornerRadius(10)
+        .padding(.vertical, 7)
+        .background(palette.fieldFill)
+        .overlay(RoundedRectangle(cornerRadius: palette.radiusControl).stroke(palette.fieldBorder, lineWidth: 1))
+        .cornerRadius(palette.radiusControl)
     }
 
     private var listEmptyState: some View {
@@ -663,10 +656,10 @@ struct ContentView: View {
             Spacer()
             Image(systemName: debouncedSearchText.isEmpty ? "waveform" : "magnifyingglass")
                 .font(.system(size: 30))
-                .foregroundColor(.secondary.opacity(0.5))
+                .foregroundColor(palette.textQuaternary.opacity(0.7))
             Text(debouncedSearchText.isEmpty ? "No recordings here yet" : "No results found")
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textQuaternary)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -677,10 +670,12 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(navTitle).font(.system(size: 16, weight: .bold))
+                    Text(navTitle)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(palette.textPrimary)
                     Text("^[\(displayedRecordings.count) recording](inflect: true)")
                         .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textQuaternary)
                 }
                 Spacer()
             }
@@ -696,7 +691,7 @@ struct ContentView: View {
                 listEmptyState
             } else {
                 ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 5) {
+                    LazyVStack(spacing: 3) {
                         ForEach(displayedRecordings) { r in
                             CompactRecordingCard(
                                 recording: r,
@@ -719,8 +714,14 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(width: 300)
-        .background(ThemePalette.cardBackground(colorScheme))
+        .frame(width: 308)
+        .background(palette.listBackground)
+    }
+
+    /// The single vertical divider used between panes. `Divider()` picks its own
+    /// colour from the system and reintroduces a tint we don't control.
+    private var hairline: some View {
+        Rectangle().fill(palette.hairline).frame(width: 1)
     }
 
     private var detailColumn: some View {
@@ -744,16 +745,16 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     Image(systemName: "waveform.circle")
                         .font(.system(size: 46))
-                        .foregroundColor(.secondary.opacity(0.4))
+                        .foregroundColor(palette.textQuaternary.opacity(0.6))
                     Text("Select a recording")
                         .font(.system(size: 13))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textQuaternary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ThemePalette.windowBackground(colorScheme))
+        .background(palette.detailBackground)
     }
 
     var body: some View {
@@ -765,15 +766,15 @@ struct ContentView: View {
             } else {
                 HStack(spacing: 0) {
                     sidebarRail
-                    Divider()
+                    hairline
                     recordingsListColumn
-                    Divider()
+                    hairline
                     detailColumn
                 }
             }
         }
         .frame(minWidth: 400, idealWidth: 400)
-        .background(ThemePalette.windowBackground(colorScheme))
+        .background(palette.windowBackground)
         .onAppear {
             viewModel.loadInitialData()
         }
@@ -838,11 +839,13 @@ struct ContentView: View {
 
 struct PermissionsView: View {
     @ObservedObject var permissionsManager: PermissionsManager
+    @Environment(\.palette) private var palette
 
     var body: some View {
         VStack(spacing: 20) {
             Text("Required Permissions")
                 .font(.title)
+                .foregroundColor(palette.textPrimary)
                 .padding()
 
             PermissionRow(
@@ -872,34 +875,39 @@ struct PermissionRow: View {
     let title: String
     let description: String
     let action: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Image(systemName: isGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundColor(isGranted ? .green : .red)
+                // Granted reads as ordinary text; only the missing permission —
+                // the thing the user has to act on — earns a colour.
+                Image(systemName: isGranted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundColor(isGranted ? palette.textTertiary : palette.danger)
 
                 Text(title)
                     .font(.headline)
+                    .foregroundColor(palette.textPrimary)
 
                 Spacer()
 
                 if !isGranted {
-                    Button("Grant Access") {
-                        action()
-                    }
-                    .buttonStyle(.borderedProminent)
+                    Button("Grant Access", action: action)
+                        .buttonStyle(FilledButtonStyle())
                 }
             }
 
             Text(description)
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
         }
         .padding()
-        .background(ThemePalette.panelSurface(colorScheme))
-        .cornerRadius(10)
+        .background(palette.groupBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .stroke(palette.hairline, lineWidth: 1)
+        )
+        .cornerRadius(palette.radiusCard)
     }
 }
 
@@ -918,7 +926,7 @@ struct RecordingRow: View {
     @State private var showReformatPopover = false
     @State private var showReformatError = false
     @State private var reformatErrorMessage = ""
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
 
     private var isPlaying: Bool {
         audioRecorder.isPlaying && audioRecorder.currentlyPlayingURL == recording.url
@@ -979,6 +987,29 @@ struct RecordingRow: View {
         return text
     }
 
+    /// Determinate progress ring, shown while a transcript is being produced.
+    private var progressRing: some View {
+        HStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .stroke(palette.textQuaternary.opacity(0.3), lineWidth: 2)
+
+                Circle()
+                    .trim(from: 0, to: CGFloat(recording.progress))
+                    .stroke(palette.textSecondary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 0.1), value: recording.progress)
+            }
+            .frame(width: 16, height: 16)
+
+            Text("\(Int(recording.progress * 100))%")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(palette.textTertiary)
+                .contentTransition(.numericText())
+                .animation(.linear(duration: 0.1), value: recording.progress)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if isPending && !isRegenerating {
@@ -986,41 +1017,24 @@ struct RecordingRow: View {
                     if let sourceFileName = recording.sourceFileName {
                         Text(sourceFileName)
                             .font(.subheadline.weight(.medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(palette.textPrimary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    
+
                     HStack(spacing: 6) {
                         if recording.status == .pending {
                             Image(systemName: "clock")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         } else {
-                           
-                            ZStack {
-                                Circle()
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 2)
-                                
-                                Circle()
-                                    .trim(from: 0, to: CGFloat(recording.progress))
-                                    .stroke(Color.secondary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .animation(.linear(duration: 0.1), value: recording.progress)
-                            }
-                            .frame(width: 16, height: 16)
-
-                            Text("\(Int(recording.progress * 100))%")
-                                .font(.caption.monospacedDigit())
-                                .foregroundColor(.secondary)
-                                .contentTransition(.numericText())
-                                .animation(.linear(duration: 0.1), value: recording.progress)
+                            progressRing
                         }
-                        
+
                         Text(statusText)
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                        
+                            .foregroundColor(palette.textTertiary)
+
                         Spacer()
                     }
                     .padding(.top, 8)
@@ -1036,10 +1050,10 @@ struct RecordingRow: View {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.caption)
-                            .foregroundColor(.red)
+                            .foregroundColor(palette.danger)
                         Text("Transcription failed")
                             .font(.caption)
-                            .foregroundColor(.red)
+                            .foregroundColor(palette.danger)
                     }
 
                     // Newer rows carry the reason in `errorMessage`; older ones
@@ -1048,14 +1062,14 @@ struct RecordingRow: View {
                     if !reason.isEmpty {
                         Text(reason)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                     }
 
                     // A failed run keeps whatever transcript was already there.
                     if recording.errorMessage != nil, !recording.transcription.isEmpty {
                         Text(recording.transcription)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                             .padding(.top, 2)
                     }
                 }
@@ -1066,12 +1080,11 @@ struct RecordingRow: View {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.caption2)
-                            .foregroundColor(.orange)
                         Text("AI formatting didn't run: \(warning)")
                             .font(.caption)
-                            .foregroundColor(.orange)
                             .lineLimit(2)
                     }
+                    .foregroundColor(palette.textTertiary)
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
                 }
@@ -1089,7 +1102,7 @@ struct RecordingRow: View {
                              ? "Straight from the transcription model"
                              : "After AI formatting")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textQuaternary)
 
                         Spacer()
                     }
@@ -1115,21 +1128,23 @@ struct RecordingRow: View {
             } else if !isPending {
                 Text("No speech detected")
                     .font(.body)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textTertiary)
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
             }
 
-            Divider()
+            Rectangle()
+                .fill(palette.hairline)
+                .frame(height: 1)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.vertical, 10)
 
             VStack(alignment: .leading, spacing: 14) {
               HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(recording.timestamp, style: .date)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textSecondary)
 
                     HStack(spacing: 4) {
                         Text(recording.timestamp, style: .time)
@@ -1147,17 +1162,17 @@ struct RecordingRow: View {
                                     .lineLimit(1)
                             }
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(SettingsTheme.accent)
+                            .foregroundColor(palette.tagText)
                             .fixedSize()
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(SettingsTheme.accent.opacity(0.12))
-                            .clipShape(Capsule())
+                            .background(palette.tagFill)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
                             .help("Pasted into \(appName)")
                         }
                     }
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(palette.textQuaternary)
                 }
                 
                 if isRegenerating {
@@ -1167,30 +1182,14 @@ struct RecordingRow: View {
                         if recording.status == .pending {
                             Image(systemName: "clock")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textTertiary)
                         } else {
-                            ZStack {
-                                Circle()
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 2)
-                                
-                                Circle()
-                                    .trim(from: 0, to: CGFloat(recording.progress))
-                                    .stroke(Color.secondary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                                    .rotationEffect(.degrees(-90))
-                                    .animation(.linear(duration: 0.1), value: recording.progress)
-                            }
-                            .frame(width: 16, height: 16)
-
-                            Text("\(Int(recording.progress * 100))%")
-                                .font(.caption.monospacedDigit())
-                                .foregroundColor(.secondary)
-                                .contentTransition(.numericText())
-                                .animation(.linear(duration: 0.1), value: recording.progress)
+                            progressRing
                         }
-                        
+
                         Text(statusText)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(palette.textTertiary)
                     }
                     .transition(.opacity)
 
@@ -1206,7 +1205,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: recording.isStarred ? "star.fill" : "star")
                                 .font(.system(size: 17))
-                                .foregroundColor(recording.isStarred ? .yellow : .secondary)
+                                .foregroundColor(recording.isStarred ? palette.textPrimary : palette.textTertiary)
                         }
                         .buttonStyle(.plain)
                         .help(recording.isStarred ? "Unstar" : "Star")
@@ -1223,7 +1222,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
                                 .font(.system(size: 20))
-                                .foregroundColor(isPlaying ? .red : ThemePalette.iconAccent(colorScheme))
+                                .foregroundColor(isPlaying ? palette.textPrimary : palette.textSecondary)
                                 .contentTransition(.symbolEffect(.replace))
                         }
                         .buttonStyle(.plain)
@@ -1237,7 +1236,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: "doc.on.doc.fill")
                                 .font(.system(size: 18))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                         .buttonStyle(.plain)
                         .help("Copy entire text")
@@ -1250,7 +1249,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: "wand.and.stars")
                                 .font(.system(size: 18))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                         .buttonStyle(.plain)
                         .help("Reformat using your current formatting settings (no re-transcription)")
@@ -1275,7 +1274,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 18))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.textSecondary)
                         }
                         .buttonStyle(.plain)
                         .help("Regenerate transcription (full re-transcription)")
@@ -1291,7 +1290,7 @@ struct RecordingRow: View {
                         }) {
                             Image(systemName: "trash.fill")
                                 .font(.system(size: 18))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(palette.danger)
                         }
                         .buttonStyle(.plain)
                         .transition(.opacity)
@@ -1304,13 +1303,14 @@ struct RecordingRow: View {
             .animation(.easeInOut(duration: 0.2), value: isRegenerating)
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
-            .background(ThemePalette.cardBackground(colorScheme))
         }
-        .background(ThemePalette.cardBackground(colorScheme))
-        .cornerRadius(8)
+        // As the detail pane the row *is* the pane, so it drops the card
+        // treatment entirely; only the standalone (list) use keeps a border.
+        .background(forceActionsVisible ? Color.clear : palette.groupBackground)
+        .cornerRadius(forceActionsVisible ? 0 : palette.radiusCard)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(ThemePalette.cardBorder(colorScheme), lineWidth: 1)
+            RoundedRectangle(cornerRadius: palette.radiusCard)
+                .stroke(forceActionsVisible ? Color.clear : palette.hairline, lineWidth: 1)
         )
         .onHover { hovering in
             isHovered = hovering
@@ -1394,6 +1394,7 @@ struct ReformatPopover: View {
     let onReformat: (ReformatOptions) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.palette) private var palette
     @State private var options = ReformatOptions.fromCurrentSettings()
     @State private var model: String = AppPreferences.shared.llmModel
     @State private var availableModels: [String] = []
@@ -1407,7 +1408,7 @@ struct ReformatPopover: View {
 
             Text("Re-runs formatting on the saved raw transcript. The audio is not re-transcribed, and the raw text is kept so you can compare or reformat again.")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(palette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Divider()
@@ -1437,7 +1438,7 @@ struct ReformatPopover: View {
                      ? "S1-mini by Superwhisper, on-device."
                      : "S1-mini is not downloaded — open Settings › Formatting first.")
                     .font(.caption)
-                    .foregroundColor(S1MiniModelManager.shared.isSelectedInstalled ? .secondary : .orange)
+                    .foregroundColor(S1MiniModelManager.shared.isSelectedInstalled ? palette.textTertiary : palette.danger)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 HStack(spacing: 8) {
@@ -1466,7 +1467,7 @@ struct ReformatPopover: View {
                 if let fetchError {
                     Text(fetchError)
                         .font(.caption)
-                        .foregroundColor(.red)
+                        .foregroundColor(palette.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1514,18 +1515,19 @@ struct ReformatPopover: View {
 
 struct ShimmerOverlay: View {
     @State private var phase: CGFloat = 0
+    @Environment(\.palette) private var palette
     
     var body: some View {
         GeometryReader { geometry in
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.secondary.opacity(0.08))
+                .fill(palette.hoverFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(
                             LinearGradient(
                                 gradient: Gradient(colors: [
                                     Color.clear,
-                                    Color.white.opacity(0.4),
+                                    palette.textPrimary.opacity(0.18),
                                     Color.clear
                                 ]),
                                 startPoint: .leading,
@@ -1553,7 +1555,7 @@ struct TranscriptionView: View {
     @Binding var isExpanded: Bool
     /// Detail-pane mode: render the full transcript with no truncation and no "Show more".
     var alwaysExpanded: Bool = false
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
     
     @State private var highlightedAttributedString: AttributedString?
     @State private var computeTask: Task<Void, Never>?
@@ -1582,7 +1584,11 @@ struct TranscriptionView: View {
         
         let text = transcribedText
         let query = searchQuery
-        
+        // A search hit is emphasis, not an alarm: it gets the theme's accent as
+        // a wash rather than the old yellow-on-black chip.
+        let highlightBackground = palette.accent.opacity(0.22)
+        let highlightForeground = palette.textPrimary
+
         computeTask = Task.detached(priority: .userInitiated) {
             var attributedString = AttributedString(text)
             let searchOptions: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
@@ -1591,8 +1597,8 @@ struct TranscriptionView: View {
             while let range = text.range(of: query, options: searchOptions, range: searchStartIndex..<text.endIndex) {
                 guard !Task.isCancelled else { return }
                 if let attributedRange = Range(range, in: attributedString) {
-                    attributedString[attributedRange].backgroundColor = .yellow
-                    attributedString[attributedRange].foregroundColor = .black
+                    attributedString[attributedRange].backgroundColor = highlightBackground
+                    attributedString[attributedRange].foregroundColor = highlightForeground
                 }
                 searchStartIndex = range.upperBound
             }
@@ -1609,8 +1615,12 @@ struct TranscriptionView: View {
         VStack(alignment: .leading, spacing: 8) {
             if alwaysExpanded {
                 // Detail pane: show the whole transcript, no truncation, no toggle.
+                // The transcript is the product, so it gets the theme's reading
+                // face and line height rather than the default body style.
                 highlightedText
-                    .font(.body)
+                    .font(palette.transcriptFont)
+                    .lineSpacing(4)
+                    .foregroundColor(palette.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .padding(8)
@@ -1641,7 +1651,7 @@ struct TranscriptionView: View {
                                     .lineLimit(3)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .textSelection(.enabled)
-                                    .foregroundColor(.primary)
+                                    .foregroundColor(palette.textPrimary)
                             }
                             .buttonStyle(.plain)
                         } else {
@@ -1661,7 +1671,7 @@ struct TranscriptionView: View {
                             Text(isExpanded ? "Show less" : "Show more")
                             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         }
-                        .foregroundColor(ThemePalette.linkText(colorScheme))
+                        .foregroundColor(palette.textSecondary)
                         .font(.footnote)
                     }
                     .padding(.horizontal, 8)
@@ -1687,7 +1697,7 @@ struct TranscriptionView: View {
 struct MicrophonePickerIconView: View {
     @ObservedObject var microphoneService: MicrophoneService
     @State private var showMenu = false
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
     
     private var builtInMicrophones: [MicrophoneService.AudioDevice] {
         microphoneService.availableMicrophones.filter { $0.isBuiltIn }
@@ -1702,15 +1712,15 @@ struct MicrophonePickerIconView: View {
             showMenu.toggle()
         }) {
             Image(systemName: microphoneService.availableMicrophones.isEmpty ? "mic.slash" : "mic.fill")
-                .font(.title3)
-                .foregroundColor(.secondary)
-                .frame(width: 32, height: 32)
-                .background(ThemePalette.panelSurface(colorScheme))
+                .font(.system(size: 13.5))
+                .foregroundColor(palette.textTertiary)
+                .frame(width: 30, height: 30)
+                .background(palette.ghostFill)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(ThemePalette.panelBorder(colorScheme), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: palette.radiusSmall)
+                        .stroke(palette.ghostBorder, lineWidth: 1)
                 )
-                .cornerRadius(8)
+                .cornerRadius(palette.radiusSmall)
         }
         .buttonStyle(.plain)
         .help(microphoneService.currentMicrophone?.displayName ?? "Select microphone")
@@ -1718,7 +1728,7 @@ struct MicrophonePickerIconView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if microphoneService.availableMicrophones.isEmpty {
                     Text("No microphones available")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(palette.textTertiary)
                         .padding()
                 } else {
                     ForEach(builtInMicrophones) { microphone in
@@ -1775,93 +1785,21 @@ struct MicrophonePickerIconView: View {
 
 struct MainRecordButton: View {
     let isRecording: Bool
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var buttonColor: Color {
-        ThemePalette.recordButtonBase(colorScheme)
-    }
+    @Environment(\.palette) private var palette
 
     var body: some View {
+        // Flat, single-colour disc: the theme's filled treatment at rest, the
+        // one live colour while recording. No gradient, no glow.
         Circle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        isRecording ? Color.red.opacity(0.8) : buttonColor.opacity(0.8),
-                        isRecording ? Color.red : buttonColor.opacity(0.9)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .fill(isRecording ? palette.live : palette.buttonFill)
             .frame(width: 48, height: 48)
-            .shadow(
-                color: isRecording ? .red.opacity(0.5) : buttonColor.opacity(0.3),
-                radius: 12,
-                x: 0,
-                y: 0
-            )
             .overlay {
-                Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                isRecording ? .red.opacity(0.6) : buttonColor.opacity(0.6),
-                                isRecording ? .red.opacity(0.3) : buttonColor.opacity(0.3)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+                Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(isRecording ? .white : palette.buttonText)
             }
-            .scaleEffect(isRecording ? 0.9 : 1.0)
+            .scaleEffect(isRecording ? 0.92 : 1.0)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isRecording)
-    }
-}
-
-enum ThemePalette {
-    static func windowBackground(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(NSColor.underPageBackgroundColor)
-            : .white
-    }
-
-    static func panelSurface(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color.gray.opacity(0.1)
-            : Color(red: 0.95, green: 0.96, blue: 0.98)
-    }
-
-    static func panelBorder(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color.gray.opacity(0.2)
-            : Color(red: 0.86, green: 0.88, blue: 0.92)
-    }
-
-    static func cardBackground(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(NSColor.controlBackgroundColor)
-            : Color.white
-    }
-
-    static func cardBorder(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(NSColor.separatorColor)
-            : Color(red: 0.86, green: 0.88, blue: 0.92)
-    }
-
-    static func recordButtonBase(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? .white
-            : Color(red: 0.35, green: 0.60, blue: 0.92)
-    }
-
-    static func iconAccent(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? .accentColor : .primary
-    }
-
-    static func linkText(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? .blue : .primary
     }
 }
 
@@ -1875,39 +1813,38 @@ struct RailItem: View {
     let isSelected: Bool
     let action: () -> Void
 
+    @Environment(\.palette) private var palette
+    @State private var isHovered = false
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(isSelected
-                              ? AnyShapeStyle(SettingsTheme.accentGradient)
-                              : AnyShapeStyle(SettingsTheme.accent.opacity(0.12)))
-                        .frame(width: 24, height: 24)
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(isSelected ? .white : SettingsTheme.accent)
-                }
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 12.5, weight: .regular))
+                    .frame(width: 15)
+                    .foregroundColor(isSelected ? palette.selectionText : palette.textTertiary)
                 Text(title)
                     .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
-                    .foregroundColor(isSelected ? .primary : .secondary)
+                    .foregroundColor(isSelected ? palette.selectionText : palette.textSecondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 10.5))
-                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                        .foregroundColor(isSelected ? palette.selectionText.opacity(0.65) : palette.textQuaternary)
                 }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(isSelected ? SettingsTheme.accent.opacity(0.13) : Color.clear)
+                RoundedRectangle(cornerRadius: palette.radiusSmall)
+                    .fill(isSelected ? palette.selectionFill : (isHovered ? palette.hoverFill : Color.clear))
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -1917,7 +1854,7 @@ struct CompactRecordingCard: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onToggleStar: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.palette) private var palette
     @State private var isHovered = false
 
     private var snippet: String {
@@ -1935,50 +1872,50 @@ struct CompactRecordingCard: View {
                     .font(.system(size: 12.5))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .foregroundColor(.primary)
+                    .foregroundColor(palette.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     if let app = recording.targetAppName, !app.isEmpty {
                         Text(app)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(SettingsTheme.accent)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundColor(palette.tagText)
                             .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(SettingsTheme.accent.opacity(0.12))
-                            .clipShape(Capsule())
+                            .background(palette.tagFill)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
                     }
                     Text(recording.timestamp, format: .dateTime.month().day())
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    Text("·").font(.system(size: 10)).foregroundColor(.secondary)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(palette.textQuaternary)
+                    Text("·").font(.system(size: 10.5)).foregroundColor(palette.textQuaternary.opacity(0.5))
                     Text(TextUtil.formatDuration(recording.duration))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(palette.textQuaternary)
                     Spacer(minLength: 2)
                     if recording.isStarred || isHovered {
                         Button(action: onToggleStar) {
                             Image(systemName: recording.isStarred ? "star.fill" : "star")
                                 .font(.system(size: 11))
-                                .foregroundColor(recording.isStarred ? .yellow : .secondary)
+                                .foregroundColor(recording.isStarred ? palette.textSecondary : palette.textQuaternary)
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
             .padding(.horizontal, 11)
-            .padding(.vertical, 9)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: 10)
+                RoundedRectangle(cornerRadius: palette.radiusCard)
                     .fill(isSelected
-                          ? SettingsTheme.accent.opacity(0.12)
-                          : (isHovered ? Color.primary.opacity(0.04) : Color.clear))
+                          ? palette.cardSelectedFill
+                          : (isHovered ? palette.hoverFill : Color.clear))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? SettingsTheme.accent.opacity(0.35) : Color.clear, lineWidth: 1)
+                RoundedRectangle(cornerRadius: palette.radiusCard)
+                    .stroke(isSelected ? palette.cardSelectedBorder : Color.clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
         }

@@ -148,9 +148,11 @@ final class AppPreferences {
     @UserDefault(key: "indicatorPosition", defaultValue: "nearCursor")
     var indicatorPosition: String
 
-    // Raw value of IndicatorStyle (see IndicatorStyle.swift)
-    @UserDefault(key: "indicatorStyle", defaultValue: "classic")
-    var indicatorStyle: String
+    // Raw value of AppTheme (see Theme/AppTheme.swift). Drives every colour in
+    // the app, including the indicator pill — which is why the old
+    // `indicatorStyle` preference no longer exists.
+    @UserDefault(key: "appTheme", defaultValue: "obsidian")
+    var appTheme: String
 
     // LLM formatting (any OpenAI-compatible endpoint).
     // Key names for the toggle and prompt predate the LLM backend, kept for migration.
