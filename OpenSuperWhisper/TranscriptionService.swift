@@ -14,12 +14,92 @@ class TranscriptionService: ObservableObject {
     @Published private(set) var conversionProgress: Float = 0.0
     
     private var currentEngine: TranscriptionEngine?
+    private var engineLoadTask: Task<TranscriptionEngine, Error>?
+    /// Bumped by `releaseEngine`. A load that was in flight across a release
+    /// compares generations when it lands and discards its result instead of
+    /// quietly reinstating a model the user asked us to give back.
+    private var engineGeneration = 0
     private var totalDuration: Float = 0.0
     private var transcriptionTask: Task<String, Error>? = nil
     private var isCancelled = false
-    
-    init() {
-        loadEngine()
+
+    var isEngineLoaded: Bool { currentEngine != nil }
+
+    /// Nothing is loaded at init. The model comes in when recording starts —
+    /// see `ModelResidency` — so an idle app holds no ASR weights.
+    init() {}
+
+    /// Starts loading in the background and ignores failure; a real error
+    /// surfaces at `transcribeAudio`, where there is a user waiting to be told.
+    func prewarm() {
+        guard currentEngine == nil, engineLoadTask == nil else { return }
+        Task { _ = try? await ensureEngineLoaded() }
+    }
+
+    /// Frees the model. Safe at any time — the next transcription reloads it.
+    func releaseEngine() {
+        guard currentEngine != nil || engineLoadTask != nil else { return }
+        engineGeneration += 1
+        engineLoadTask?.cancel()
+        engineLoadTask = nil
+        currentEngine?.unload()
+        currentEngine = nil
+        print("Engine released")
+    }
+
+    /// Loads the engine if needed. Concurrent callers await one load rather
+    /// than each starting their own.
+    @discardableResult
+    func ensureEngineLoaded() async throws -> TranscriptionEngine {
+        if let currentEngine { return currentEngine }
+
+        let generation = engineGeneration
+        if let engineLoadTask {
+            let engine = try await engineLoadTask.value
+            return try claimLoadedEngine(engine, generation: generation)
+        }
+
+        let selectedEngine = AppPreferences.shared.selectedEngine
+        print("Loading engine: \(selectedEngine)")
+        isLoading = true
+
+        let task = Task<TranscriptionEngine, Error> {
+            let engine: TranscriptionEngine = selectedEngine == "fluidaudio"
+                ? await FluidAudioEngine()
+                : await WhisperEngine()
+            try await engine.initialize()
+            return engine
+        }
+        engineLoadTask = task
+
+        do {
+            let engine = try await task.value
+            isLoading = false
+            let claimed = try claimLoadedEngine(engine, generation: generation)
+            engineLoadTask = nil
+            currentEngine = claimed
+            print("Engine loaded: \(selectedEngine)")
+            return claimed
+        } catch {
+            if engineGeneration == generation {
+                engineLoadTask = nil
+            }
+            isLoading = false
+            print("Failed to load engine: \(error)")
+            throw error
+        }
+    }
+
+    /// A load that finished after a `releaseEngine` must not resurrect the
+    /// model: unload what just landed and let the caller retry from scratch.
+    private func claimLoadedEngine(
+        _ engine: TranscriptionEngine, generation: Int
+    ) throws -> TranscriptionEngine {
+        guard engineGeneration == generation else {
+            engine.unload()
+            throw CancellationError()
+        }
+        return engine
     }
     
     func cancelTranscription() {
@@ -34,40 +114,11 @@ class TranscriptionService: ObservableObject {
         isCancelled = false
     }
     
-    private func loadEngine() {
-        let selectedEngine = AppPreferences.shared.selectedEngine
-        print("Loading engine: \(selectedEngine)")
-        
-        isLoading = true
-        
-        Task.detached(priority: .userInitiated) {
-            let engine: TranscriptionEngine?
-            
-            if selectedEngine == "fluidaudio" {
-                engine = await FluidAudioEngine()
-            } else {
-                engine = await WhisperEngine()
-            }
-            
-            do {
-                try await engine?.initialize()
-                
-                await MainActor.run {
-                    self.currentEngine = engine
-                    self.isLoading = false
-                    print("Engine loaded: \(selectedEngine)")
-                }
-            } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    print("Failed to load engine: \(error)")
-                }
-            }
-        }
-    }
-    
+    /// Drops the current engine so the next use picks up the new selection.
+    /// Deliberately does not reload: nothing is resident while idle, and the
+    /// next recording prewarms the new choice anyway.
     func reloadEngine() {
-        loadEngine()
+        releaseEngine()
     }
     
     func reloadModel(with path: String) {
@@ -110,8 +161,18 @@ class TranscriptionService: ObservableObject {
             self.totalDuration = durationInSeconds
         }
         
-        guard let engine = currentEngine else {
-            throw TranscriptionError.contextInitializationFailed
+        // Normally already loaded by the prewarm at recording start; this
+        // covers a cold path such as dropping a file onto the app.
+        //
+        // One retry: a release landing mid-load (memory pressure, or the model
+        // being changed in Settings) cancels the load, and the second attempt
+        // starts a fresh one rather than failing a transcription for it.
+        let engine: TranscriptionEngine
+        do {
+            engine = try await ensureEngineLoaded()
+        } catch is CancellationError {
+            guard !isCancelled else { throw CancellationError() }
+            engine = try await ensureEngineLoaded()
         }
         
         // Setup progress callback for engines

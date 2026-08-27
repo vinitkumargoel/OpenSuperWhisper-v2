@@ -183,6 +183,9 @@ class ContentViewModel: ObservableObject {
     func startRecording() {
         // Remember which app the user is dictating into, for per-app modes.
         FocusUtils.captureFrontmostApp()
+        // Start loading the models now: the user is about to speak for several
+        // seconds, which is exactly the window the load needs.
+        ModelResidency.shared.recordingDidStart()
         if microphoneService.isActiveMicrophoneRequiresConnection() {
             state = .connecting
             stopBlinking()
@@ -211,10 +214,13 @@ class ContentViewModel: ObservableObject {
         if let tempURL = recorder.stopRecording() {
             Task { [weak self] in
                 guard let self = self else { return }
+                ModelResidency.shared.pipelineDidBegin()
+                defer { ModelResidency.shared.pipelineDidFinish() }
 
                 do {
                     print("start decoding...")
                     let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    ModelResidency.shared.transcriptionDidFinish()
                     var formattingError: Error?
                     let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                         await MainActor.run {
@@ -296,6 +302,7 @@ class ContentViewModel: ObservableObject {
         } else {
             state = .idle
             recordingDuration = 0
+            ModelResidency.shared.recordingDidCancel()
         }
     }
 
@@ -1073,10 +1080,16 @@ struct RecordingRow: View {
                     HStack(spacing: 6) {
                         Picker("", selection: $showRawTranscription) {
                             Text("Formatted").tag(false)
-                            Text("Raw").tag(true)
+                            Text("Original").tag(true)
                         }
                         .pickerStyle(.segmented)
                         .frame(width: 170)
+
+                        Text(showRawTranscription
+                             ? "Straight from the transcription model"
+                             : "After AI formatting")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
 
                         Spacer()
                     }
@@ -1240,13 +1253,13 @@ struct RecordingRow: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Reformat with AI (re-runs formatting only, no re-transcription)")
+                        .help("Reformat using your current formatting settings (no re-transcription)")
                         .transition(.opacity)
                         .popover(isPresented: $showReformatPopover, arrowEdge: .bottom) {
-                            ReformatPopover { model in
+                            ReformatPopover { options in
                                 Task {
                                     do {
-                                        try await TranscriptionQueue.shared.reformatRecording(recording, model: model)
+                                        try await TranscriptionQueue.shared.reformatRecording(recording, options: options)
                                     } catch {
                                         reformatErrorMessage = error.localizedDescription
                                         showReformatError = true
@@ -1332,6 +1345,25 @@ struct RecordingRow: View {
                     Label("Reveal Audio in Finder", systemImage: "folder")
                 }
             }
+            if recording.status == .completed && !recording.transcription.isEmpty {
+                Divider()
+                // One-click path: reformat exactly as the live pipeline would,
+                // no popover. The popover is for deviating from that.
+                Button {
+                    Task {
+                        do {
+                            try await TranscriptionQueue.shared.reformatRecording(
+                                recording, options: .fromCurrentSettings()
+                            )
+                        } catch {
+                            reformatErrorMessage = error.localizedDescription
+                            showReformatError = true
+                        }
+                    }
+                } label: {
+                    Label("Reformat with Current Settings", systemImage: "wand.and.stars")
+                }
+            }
             if recording.status == .completed || recording.status == .failed {
                 Divider()
                 Button {
@@ -1358,10 +1390,11 @@ struct RecordingRow: View {
 }
 
 struct ReformatPopover: View {
-    /// Called with the chosen model id (may equal the settings default).
-    let onReformat: (String) -> Void
+    /// Called with the settings to reformat under.
+    let onReformat: (ReformatOptions) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var options = ReformatOptions.fromCurrentSettings()
     @State private var model: String = AppPreferences.shared.llmModel
     @State private var availableModels: [String] = []
     @State private var isFetching = false
@@ -1369,49 +1402,90 @@ struct ReformatPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Reformat with AI")
+            Text("Reformat")
                 .font(.headline)
 
-            Text("Re-runs LLM formatting on the saved raw transcript. The audio is not re-transcribed.")
+            Text("Re-runs formatting on the saved raw transcript. The audio is not re-transcribed, and the raw text is kept so you can compare or reformat again.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
-                TextField("Model id", text: $model)
-                    .textFieldStyle(.roundedBorder)
+            Divider()
 
-                if !availableModels.isEmpty {
-                    Picker("", selection: $model) {
-                        ForEach(availableModels, id: \.self) { modelId in
-                            Text(modelId).tag(modelId)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 130)
+            // Pre-filled from the user's current settings — the point of the
+            // button is to reproduce the live pipeline, not to re-specify it.
+            Picker("", selection: $options.backend) {
+                ForEach(FormattingBackend.allCases) { backend in
+                    Text(backend.title).tag(backend)
                 }
-
-                Button(isFetching ? "..." : "Fetch") {
-                    fetchModels()
-                }
-                .disabled(isFetching)
-                .controlSize(.small)
-                .help("List models from the configured endpoint")
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-            if let fetchError {
-                Text(fetchError)
+            if options.backend == .s1mini {
+                Picker("Styling", selection: $options.styling) {
+                    ForEach(S1Styling.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Structure", selection: $options.structure) {
+                    ForEach(S1Structure.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Context", selection: $options.context) {
+                    ForEach(S1Context.allCases) { Text($0.title).tag($0) }
+                }
+
+                Text(S1MiniModelManager.shared.isSelectedInstalled
+                     ? "S1-mini by Superwhisper, on-device."
+                     : "S1-mini is not downloaded — open Settings › Formatting first.")
                     .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundColor(S1MiniModelManager.shared.isSelectedInstalled ? .secondary : .orange)
                     .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 8) {
+                    TextField("Model id", text: $model)
+                        .textFieldStyle(.roundedBorder)
+
+                    if !availableModels.isEmpty {
+                        Picker("", selection: $model) {
+                            ForEach(availableModels, id: \.self) { modelId in
+                                Text(modelId).tag(modelId)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 130)
+                    }
+
+                    Button(isFetching ? "..." : "Fetch") {
+                        fetchModels()
+                    }
+                    .disabled(isFetching)
+                    .controlSize(.small)
+                    .help("List models from the configured endpoint")
+                }
+
+                if let fetchError {
+                    Text(fetchError)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             HStack {
+                Button("Reset to settings") {
+                    options = ReformatOptions.fromCurrentSettings()
+                    model = AppPreferences.shared.llmModel
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+
                 Spacer()
+
                 Button("Reformat") {
+                    var chosen = options
+                    chosen.model = options.backend == .api ? model : nil
                     dismiss()
-                    onReformat(model)
+                    onReformat(chosen)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)

@@ -272,6 +272,100 @@ class SettingsViewModel: ObservableObject {
     @Published var isFetchingLLMModels: Bool = false
     @Published var llmModelsFetchError: String?
 
+    // MARK: - Formatting backend / on-device model
+
+    @Published var formattingBackend: FormattingBackend {
+        didSet {
+            AppPreferences.shared.formattingBackendValue = formattingBackend
+        }
+    }
+
+    @Published var s1MiniVariant: String {
+        didSet {
+            AppPreferences.shared.s1MiniVariant = s1MiniVariant
+        }
+    }
+
+    @Published var s1DefaultStyling: S1Styling {
+        didSet { AppPreferences.shared.s1DefaultStyling = s1DefaultStyling.rawValue }
+    }
+
+    @Published var s1DefaultStructure: S1Structure {
+        didSet { AppPreferences.shared.s1DefaultStructure = s1DefaultStructure.rawValue }
+    }
+
+    @Published var s1DefaultContext: S1Context {
+        didSet { AppPreferences.shared.s1DefaultContext = s1DefaultContext.rawValue }
+    }
+
+    @Published var prewarmModelsOnRecord: Bool {
+        didSet { AppPreferences.shared.prewarmModelsOnRecord = prewarmModelsOnRecord }
+    }
+
+    @Published var modelIdleUnloadSeconds: Int {
+        didSet { AppPreferences.shared.modelIdleUnloadSeconds = modelIdleUnloadSeconds }
+    }
+
+    // Test-format box, so the whole path can be checked without recording.
+    @Published var testInput: String =
+        "so um i need to like send the the report by uh friday no wait make that thursday"
+    @Published var testOutput: String = ""
+    @Published var testError: String?
+    @Published var isTesting = false
+    @Published var testDuration: String = ""
+    @Published var residencySummary: String = ""
+
+    func runFormatTest() {
+        guard !isTesting else { return }
+        isTesting = true
+        testOutput = ""
+        testError = nil
+        testDuration = ""
+
+        let input = testInput
+        let axes = (styling: s1DefaultStyling, structure: s1DefaultStructure, context: s1DefaultContext)
+        let backend = formattingBackend
+
+        Task { @MainActor in
+            defer { isTesting = false }
+            let started = Date()
+            do {
+                let output: String
+                switch backend {
+                case .api:
+                    output = try await LLMTextFormatter().format(input)
+                case .s1mini:
+                    output = try await S1MiniFormatter.shared.format(
+                        input,
+                        styling: axes.styling,
+                        structure: axes.structure,
+                        context: axes.context
+                    )
+                }
+                let elapsed = Date().timeIntervalSince(started)
+                testDuration = String(format: "%.2f s", elapsed)
+                // An empty result is what the model returns for filler-only
+                // input, so say that rather than showing a blank box.
+                testOutput = output.isEmpty ? "(empty — the model read this as filler only)" : output
+            } catch {
+                testError = error.localizedDescription
+            }
+            await refreshResidency()
+        }
+    }
+
+    func refreshResidency() async {
+        residencySummary = await ModelResidency.shared.residencySummary()
+    }
+
+    func unloadModelsNow() {
+        Task { @MainActor in
+            TranscriptionService.shared.releaseEngine()
+            await S1MiniFormatter.shared.unload()
+            await refreshResidency()
+        }
+    }
+
     func fetchLLMModels() {
         isFetchingLLMModels = true
         llmModelsFetchError = nil
@@ -378,6 +472,13 @@ class SettingsViewModel: ObservableObject {
         self.formattingModes = prefs.formattingModes
         self.activeFormattingModeID = prefs.activeFormattingModeID
         self.autoSwitchFormattingMode = prefs.autoSwitchFormattingMode
+        self.formattingBackend = prefs.formattingBackendValue
+        self.s1MiniVariant = prefs.s1MiniVariant
+        self.s1DefaultStyling = S1Styling(rawValue: prefs.s1DefaultStyling) ?? .semiFormal
+        self.s1DefaultStructure = S1Structure(rawValue: prefs.s1DefaultStructure) ?? .prose
+        self.s1DefaultContext = S1Context(rawValue: prefs.s1DefaultContext) ?? .general
+        self.prewarmModelsOnRecord = prefs.prewarmModelsOnRecord
+        self.modelIdleUnloadSeconds = prefs.modelIdleUnloadSeconds
         self.editingModeID = prefs.activeFormattingModeID
 
         if let savedPath = prefs.selectedWhisperModelPath ?? prefs.selectedModelPath {
@@ -778,6 +879,9 @@ enum SettingsTheme {
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @ObservedObject private var microphoneService = MicrophoneService.shared
+    // Observed, not just referenced: the download card reads its progress and
+    // install state, and a plain `let manager = .shared` never redraws.
+    @ObservedObject private var s1Manager = S1MiniModelManager.shared
     @Environment(\.dismiss) var dismiss
     @State private var isRecordingNewShortcut = false
     @State private var selectedTab = 0
@@ -1137,6 +1241,44 @@ struct SettingsView: View {
                                 .labelsHidden()
                         }
 
+                        Picker("", selection: $viewModel.formattingBackend) {
+                            ForEach(FormattingBackend.allCases) { backend in
+                                Text(backend.title).tag(backend)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text(viewModel.formattingBackend.subtitle)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if viewModel.formattingBackend == .s1mini {
+                            onDeviceFormattingSection
+                        } else {
+                            apiFormattingSection
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.controlBackgroundColor).opacity(0.3))
+                .cornerRadius(12)
+
+                modelResidencySection
+
+                formatTestSection
+
+                formattingModesSection
+
+                vocabularySection
+            }
+            .padding()
+        }
+    }
+
+    private var apiFormattingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("API Base URL")
                                 .font(.subheadline)
@@ -1197,19 +1339,212 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             }
                         }
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(.controlBackgroundColor).opacity(0.3))
-                .cornerRadius(12)
-
-                formattingModesSection
-
-                vocabularySection
-            }
-            .padding()
         }
+    }
+
+    // MARK: - On-device (S1-mini)
+
+    private var onDeviceFormattingSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            s1DownloadCard
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Default style")
+                    .font(.subheadline)
+                Text("S1-mini's system prompt is fixed by its training, so these three settings are how you steer it. Formatting Modes can override them per app.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Picker("Styling", selection: $viewModel.s1DefaultStyling) {
+                    ForEach(S1Styling.allCases) { Text($0.title).tag($0) }
+                }
+                Text(viewModel.s1DefaultStyling.detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Picker("Structure", selection: $viewModel.s1DefaultStructure) {
+                    ForEach(S1Structure.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Context", selection: $viewModel.s1DefaultContext) {
+                    ForEach(S1Context.allCases) { Text($0.title).tag($0) }
+                }
+            }
+
+            Text("S1-mini by Superwhisper — English only, and it normalizes rather than rewrites. Keep the API backend selected for modes that need a real prompt.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var s1DownloadCard: some View {
+        let manager = s1Manager
+        let variant = manager.selectedVariant
+        // installedRevision is read so SwiftUI re-evaluates after download/delete.
+        let _ = manager.installedRevision
+        let installed = manager.isInstalled(variant)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Model weights")
+                        .font(.subheadline)
+                    Text(installed
+                         ? "Installed — \(ByteCountFormatter.string(fromByteCount: manager.installedBytes(variant), countStyle: .file))"
+                         : "Not downloaded — \(ByteCountFormatter.string(fromByteCount: variant.approximateBytes, countStyle: .file))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                if manager.isDownloading {
+                    Button("Cancel") { manager.cancelDownload() }
+                        .controlSize(.small)
+                } else if installed {
+                    Button("Delete") { manager.delete(variant) }
+                        .controlSize(.small)
+                } else {
+                    Button("Download") { manager.download(variant) }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+
+            Picker("Quantization", selection: $viewModel.s1MiniVariant) {
+                ForEach(S1MiniModelManager.Variant.all) { Text($0.title).tag($0.id) }
+            }
+            .disabled(manager.isDownloading)
+
+            if manager.isDownloading {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: manager.downloadProgress)
+                    Text("\(manager.downloadingFile) — \(Int(manager.downloadProgress * 100))%")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if let error = manager.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(12)
+        .background(Color(.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(8)
+    }
+
+    // MARK: - Model residency
+
+    private var modelResidencySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Memory")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Load models when recording starts")
+                            .font(.subheadline)
+                        Text("Loading takes a second or two. Doing it while you are still speaking means you never wait for it afterwards.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $viewModel.prewarmModelsOnRecord)
+                        .toggleStyle(SwitchToggleStyle(tint: Color.accentColor))
+                        .labelsHidden()
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Keep in memory after use", selection: $viewModel.modelIdleUnloadSeconds) {
+                        Text("Release immediately").tag(0)
+                        Text("30 seconds").tag(30)
+                        Text("1 minute").tag(60)
+                        Text("10 minutes").tag(600)
+                        Text("Until quit").tag(-1)
+                    }
+                    Text(viewModel.modelIdleUnloadSeconds == 0
+                         ? "Lowest memory: the transcription model is released before formatting starts, so the two never occupy memory at once."
+                         : "Back-to-back dictation reuses the loaded models instead of reloading them.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text(viewModel.residencySummary.isEmpty ? "—" : viewModel.residencySummary)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Refresh") {
+                        Task { await viewModel.refreshResidency() }
+                    }
+                    .controlSize(.small)
+                    Button("Unload now") { viewModel.unloadModelsNow() }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.controlBackgroundColor).opacity(0.3))
+        .cornerRadius(12)
+        .task { await viewModel.refreshResidency() }
+    }
+
+    // MARK: - Test
+
+    private var formatTestSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Test formatting")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Runs the text below through the selected backend, exactly as a finished transcript would go.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                TextEditor(text: $viewModel.testInput)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(height: 56)
+                    .padding(4)
+                    .background(Color(.textBackgroundColor))
+                    .cornerRadius(6)
+
+                HStack {
+                    Button(viewModel.isTesting ? "Formatting..." : "Format") {
+                        viewModel.runFormatTest()
+                    }
+                    .disabled(viewModel.isTesting)
+                    .buttonStyle(.borderedProminent)
+
+                    if !viewModel.testDuration.isEmpty {
+                        Text(viewModel.testDuration)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if let error = viewModel.testError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                } else if !viewModel.testOutput.isEmpty {
+                    Text(viewModel.testOutput)
+                        .font(.system(size: 12))
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.controlBackgroundColor).opacity(0.5))
+                        .cornerRadius(6)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.controlBackgroundColor).opacity(0.3))
+        .cornerRadius(12)
     }
 
     private var formattingModesSection: some View {
@@ -1303,8 +1638,38 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
+                Text("On-device style")
+                    .font(.subheadline)
+                Text("Used when the on-device backend is selected. S1-mini cannot read the prompt below — these are its only controls.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Picker("Styling", selection: Binding(
+                    get: { mode.wrappedValue.styling ?? viewModel.s1DefaultStyling },
+                    set: { mode.wrappedValue.styling = $0 }
+                )) {
+                    ForEach(S1Styling.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Structure", selection: Binding(
+                    get: { mode.wrappedValue.structure ?? viewModel.s1DefaultStructure },
+                    set: { mode.wrappedValue.structure = $0 }
+                )) {
+                    ForEach(S1Structure.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Context", selection: Binding(
+                    get: { mode.wrappedValue.context ?? viewModel.s1DefaultContext },
+                    set: { mode.wrappedValue.context = $0 }
+                )) {
+                    ForEach(S1Context.allCases) { Text($0.title).tag($0) }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Prompt")
                     .font(.subheadline)
+                Text("Used by the API backend.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 TextEditor(text: mode.prompt)
                     .font(.system(.body, design: .monospaced))
                     .frame(height: 100)

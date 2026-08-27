@@ -102,6 +102,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         
         OpenSuperWhisperApp.startTranscriptionQueue()
         observeMicrophoneChanges()
+
+        if ProcessInfo.processInfo.environment["OSW_S1_SELFTEST"] != nil {
+            runS1SelfTest()
+        }
+    }
+
+    /// Runs the on-device formatter over the model card's own example and
+    /// prints the result, so the whole path can be checked from a terminal
+    /// without recording anything. Enabled with OSW_S1_SELFTEST=1.
+    private func runS1SelfTest() {
+        Task { @MainActor in
+            let samples = [
+                "so um i need to like send the the report by uh friday no wait make that thursday",
+                "i think the answer is forty two no sorry forty three",
+                "send it to support at superwhisper dot com",
+                "um",
+            ]
+            print("[S1 self-test] loading...")
+            let loadStart = Date()
+            do {
+                _ = try await S1MiniFormatter.shared.load()
+                print(String(format: "[S1 self-test] loaded in %.2fs", Date().timeIntervalSince(loadStart)))
+                for sample in samples {
+                    let start = Date()
+                    let output = try await S1MiniFormatter.shared.format(
+                        sample, styling: .semiFormal, structure: .prose, context: .general
+                    )
+                    print(String(
+                        format: "[S1 self-test] %.2fs  in: %@\n[S1 self-test]        out: %@",
+                        Date().timeIntervalSince(start), sample, output.isEmpty ? "(empty)" : output
+                    ))
+                }
+                await S1MiniFormatter.shared.unload()
+
+                // Exercise the residency path the real pipeline uses, so
+                // "does it actually offload afterwards" is answerable here.
+                let idle = AppPreferences.shared.modelIdleUnloadSeconds
+                print("[S1 self-test] --- residency check (idle = \(idle)s) ---")
+                print("[S1 self-test] formatting enabled: \(AppPreferences.shared.formattingEnabled), backend: \(AppPreferences.shared.formattingBackendValue.rawValue)")
+
+                ModelResidency.shared.recordingDidStart()
+                try? await Task.sleep(for: .seconds(2))
+                print("[S1 self-test] during recording: \(await ModelResidency.shared.residencySummary())")
+
+                ModelResidency.shared.pipelineDidBegin()
+                _ = try? await S1MiniFormatter.shared.format(
+                    "so um this is the pipeline test", styling: .semiFormal, structure: .prose, context: .general
+                )
+                print("[S1 self-test] during pipeline: \(await ModelResidency.shared.residencySummary())")
+                ModelResidency.shared.pipelineDidFinish()
+
+                try? await Task.sleep(for: .seconds(max(1, idle) + 3))
+                print("[S1 self-test] after idle:      \(await ModelResidency.shared.residencySummary())")
+                print("[S1 self-test] done.")
+            } catch {
+                print("[S1 self-test] FAILED: \(error.localizedDescription)")
+            }
+        }
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {

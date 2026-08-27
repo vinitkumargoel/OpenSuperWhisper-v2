@@ -80,6 +80,12 @@ class WhisperEngine: TranscriptionEngine {
         }
     }
     
+    func unload() {
+        cancelTranscription()
+        // MyWhisperContext frees the whisper context in deinit.
+        context = nil
+    }
+
     func transcribeAudio(url: URL, settings: Settings) async throws -> String {
         guard let context = context else {
             throw TranscriptionError.contextInitializationFailed

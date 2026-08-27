@@ -168,13 +168,14 @@ class TranscriptionQueue: ObservableObject {
         startProcessingQueue()
     }
 
-    /// Re-runs only the LLM formatting step on the stored raw transcript —
-    /// no audio re-transcription. `model` overrides the configured LLM model
-    /// for this one request (nil/empty = use the settings default).
+    /// Re-runs only the formatting step on the stored raw transcript, using the
+    /// backend and style in `options` — the audio is never re-transcribed.
     ///
-    /// The transient "formatting" state is only broadcast to the UI, never
-    /// persisted, so the ASR queue can't mistake the row for pending work.
-    func reformatRecording(_ recording: Recording, model: String?) async throws {
+    /// `rawTranscription` is preserved, so the original stays comparable in the
+    /// history panel and the recording can be reformatted again with different
+    /// settings. The transient "formatting" state is only broadcast to the UI,
+    /// never persisted, so the ASR queue can't mistake the row for pending work.
+    func reformatRecording(_ recording: Recording, options: ReformatOptions) async throws {
         let raw = recording.rawTranscription?.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = (raw?.isEmpty == false ? raw! : recording.transcription)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,8 +183,25 @@ class TranscriptionQueue: ObservableObject {
 
         postReformatProgress(recording.id, progress: 0.9, status: .formatting, isRegeneration: true)
 
+        // A reformat is a pipeline like any other: it should load the model it
+        // needs and release it again afterwards.
+        ModelResidency.shared.pipelineDidBegin()
+        defer { ModelResidency.shared.pipelineDidFinish() }
+
         do {
-            let formattedRaw = try await LLMTextFormatter().format(source, modelOverride: model)
+            let formattedRaw: String
+            switch options.backend {
+            case .api:
+                formattedRaw = try await LLMTextFormatter().format(source, modelOverride: options.model)
+            case .s1mini:
+                let output = try await S1MiniFormatter.shared.format(
+                    source,
+                    styling: options.styling,
+                    structure: options.structure,
+                    context: options.context
+                )
+                formattedRaw = output.isEmpty ? source : output
+            }
             let formatted = VocabularyProcessor.applyConfigured(formattedRaw)
             await recordingStore.updateRecordingProgressOnlySync(
                 recording.id,
@@ -275,6 +293,10 @@ class TranscriptionQueue: ObservableObject {
         }
 
         currentTranscriptionTask = Task {
+            // Dropped files have no recording window to prewarm behind, so the
+            // load happens inline — but the release policy still applies.
+            ModelResidency.shared.pipelineDidBegin()
+            defer { ModelResidency.shared.pipelineDidFinish() }
             do {
                 if isRecordingCancelled(recording.id) {
                     return

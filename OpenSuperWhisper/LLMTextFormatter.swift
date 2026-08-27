@@ -167,7 +167,23 @@ enum FinalTextProcessor {
 
         do {
             await onWillFormat?()
-            let formatted = try await LLMTextFormatter().format(input)
+            let formatted: String
+            switch AppPreferences.shared.formattingBackendValue {
+            case .api:
+                formatted = try await LLMTextFormatter().format(input)
+            case .s1mini:
+                let axes = AppPreferences.shared.resolveS1Axes()
+                let output = try await S1MiniFormatter.shared.format(
+                    input,
+                    styling: axes.styling,
+                    structure: axes.structure,
+                    context: axes.context
+                )
+                // Filler-only speech normalizes to nothing. That is a correct
+                // result from the model, but pasting an empty string would
+                // look like a failure, so the raw transcript stands instead.
+                formatted = output.isEmpty ? input : output
+            }
             return VocabularyProcessor.applyConfigured(formatted)
         } catch {
             print("LLM formatting failed: \(error.localizedDescription)")

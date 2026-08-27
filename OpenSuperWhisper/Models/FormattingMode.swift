@@ -11,11 +11,31 @@ struct FormattingMode: Codable, Identifiable, Equatable {
     /// App bundle IDs that auto-select this mode (e.g. "com.apple.mail").
     var appBundleIDs: [String]
 
-    init(id: UUID = UUID(), name: String, prompt: String, appBundleIDs: [String] = []) {
+    /// Control-line axes used when the on-device backend (S1-mini) is active.
+    /// S1-mini's system prompt is fixed by its training, so `prompt` above
+    /// cannot steer it — these three values are the only steering it has.
+    /// `nil` falls back to the app-wide defaults. Optional so modes saved
+    /// before the on-device backend existed still decode.
+    var styling: S1Styling?
+    var structure: S1Structure?
+    var context: S1Context?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        prompt: String,
+        appBundleIDs: [String] = [],
+        styling: S1Styling? = nil,
+        structure: S1Structure? = nil,
+        context: S1Context? = nil
+    ) {
         self.id = id
         self.name = name
         self.prompt = prompt
         self.appBundleIDs = appBundleIDs
+        self.styling = styling
+        self.structure = structure
+        self.context = context
     }
 }
 

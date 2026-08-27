@@ -126,6 +126,9 @@ class IndicatorViewModel: ObservableObject {
 
         // Remember which app the user is dictating into, for per-app modes.
         FocusUtils.captureFrontmostApp()
+        // Start loading the models now: the user is about to speak for several
+        // seconds, which is exactly the window the load needs.
+        ModelResidency.shared.recordingDidStart()
 
         if MicrophoneService.shared.isActiveMicrophoneRequiresConnection() {
             state = .connecting
@@ -145,6 +148,7 @@ class IndicatorViewModel: ObservableObject {
         
         if isTranscriptionBusy {
             recorder.cancelRecording()
+            ModelResidency.shared.recordingDidCancel()
             showBusyMessage()
             return
         }
@@ -155,6 +159,8 @@ class IndicatorViewModel: ObservableObject {
         if let tempURL = recorder.stopRecording() {
             Task { [weak self] in
                 guard let self = self else { return }
+                ModelResidency.shared.pipelineDidBegin()
+                defer { ModelResidency.shared.pipelineDidFinish() }
 
                 // When set, the pill shows this briefly and hides itself on a
                 // timer, so we must not also hide it immediately below.
@@ -163,6 +169,7 @@ class IndicatorViewModel: ObservableObject {
                 do {
                     print("start decoding...")
                     let rawText = try await transcriptionService.transcribeAudio(url: tempURL, settings: Settings())
+                    ModelResidency.shared.transcriptionDidFinish()
                     var formattingError: Error?
                     let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                         await MainActor.run {
@@ -246,7 +253,8 @@ class IndicatorViewModel: ObservableObject {
             // stopRecording() returns nil for clips under a second - a normal
             // "too short to transcribe" case, not a failure.
             print("Recording too short to transcribe - discarded")
-            
+            ModelResidency.shared.recordingDidCancel()
+
             Task {
                 await MainActor.run {
                     self.delegate?.didFinishDecoding()
@@ -312,6 +320,7 @@ class IndicatorViewModel: ObservableObject {
         hideTimer?.invalidate()
         hideTimer = nil
         recorder.cancelRecording()
+        ModelResidency.shared.recordingDidCancel()
     }
 
     @MainActor

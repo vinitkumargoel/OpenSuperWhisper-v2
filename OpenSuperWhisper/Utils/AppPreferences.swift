@@ -169,6 +169,77 @@ final class AppPreferences {
     @UserDefault(key: "codexFormattingPrompt", defaultValue: AppPreferences.defaultFormattingPrompt)
     var formattingPrompt: String
 
+    // MARK: - Formatting backend
+
+    /// Raw value of `FormattingBackend`. Defaults to the API endpoint so
+    /// existing setups are untouched by the on-device addition.
+    @UserDefault(key: "formattingBackend", defaultValue: "api")
+    var formattingBackend: String
+
+    var formattingBackendValue: FormattingBackend {
+        get { FormattingBackend(rawValue: formattingBackend) ?? .api }
+        set { formattingBackend = newValue.rawValue }
+    }
+
+    /// Which MLX quantization of S1-mini to use — see `S1MiniModelManager.Variant`.
+    @UserDefault(key: "s1MiniVariant", defaultValue: "4bit")
+    var s1MiniVariant: String
+
+    /// Fallback control-line axes, used when the active formatting mode does
+    /// not carry its own.
+    @UserDefault(key: "s1DefaultStyling", defaultValue: "semi-formal")
+    var s1DefaultStyling: String
+
+    @UserDefault(key: "s1DefaultStructure", defaultValue: "prose")
+    var s1DefaultStructure: String
+
+    @UserDefault(key: "s1DefaultContext", defaultValue: "general")
+    var s1DefaultContext: String
+
+    // MARK: - Model residency
+
+    /// Load the transcription model and the on-device formatter the moment
+    /// recording starts, so the load overlaps with the user speaking instead
+    /// of making them wait afterwards.
+    @UserDefault(key: "prewarmModelsOnRecord", defaultValue: true)
+    var prewarmModelsOnRecord: Bool
+
+    /// Seconds to keep models in memory after the pipeline finishes.
+    /// `0` releases immediately; a negative value keeps them resident.
+    @UserDefault(key: "modelIdleUnloadSeconds", defaultValue: 60)
+    var modelIdleUnloadSeconds: Int
+
+    /// Resolves the control-line axes for the current formatting request,
+    /// following the same mode-priority rules as `resolveFormattingPrompt`.
+    func resolveS1Axes() -> (styling: S1Styling, structure: S1Structure, context: S1Context) {
+        let fallback = (
+            styling: S1Styling(rawValue: s1DefaultStyling) ?? .semiFormal,
+            structure: S1Structure(rawValue: s1DefaultStructure) ?? .prose,
+            context: S1Context(rawValue: s1DefaultContext) ?? .general
+        )
+
+        let modes = formattingModes
+        guard !modes.isEmpty else { return fallback }
+
+        var selected: FormattingMode?
+        if autoSwitchFormattingMode,
+           let bundleID = FocusUtils.lastFrontmostBundleID,
+           let matched = modes.first(where: { $0.appBundleIDs.contains(bundleID) }) {
+            selected = matched
+        } else if let active = modes.first(where: { $0.id.uuidString == activeFormattingModeID }) {
+            selected = active
+        } else {
+            selected = modes.first
+        }
+
+        guard let mode = selected else { return fallback }
+        return (
+            styling: mode.styling ?? fallback.styling,
+            structure: mode.structure ?? fallback.structure,
+            context: mode.context ?? fallback.context
+        )
+    }
+
     // MARK: - Custom Vocabulary (word replacements)
 
     @UserDefault(key: "vocabularyRulesData", defaultValue: Data())
