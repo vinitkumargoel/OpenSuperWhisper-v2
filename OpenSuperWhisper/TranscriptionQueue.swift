@@ -308,6 +308,9 @@ class TranscriptionQueue: ObservableObject {
 
                 let settings = Settings()
                 let rawText = try await transcriptionService.transcribeAudio(url: sourceURL, settings: settings)
+                // Hand the ASR weights back before formatting starts, so the
+                // two models never sit in memory at once on this path either.
+                ModelResidency.shared.transcriptionDidFinish()
                 var formattingError: Error?
                 let text = await FinalTextProcessor.formatIfNeeded(rawText) {
                     await self.recordingStore.updateRecordingStatusOnly(
