@@ -58,7 +58,7 @@ struct AnalyticsSnapshot {
     /// Oldest → newest, `maxTrackedDays` entries (zero-filled for days with no activity).
     let dailyActivity: [AnalyticsDay]
 
-    static let empty = AnalyticsSnapshot(recordings: [])
+    static let empty = AnalyticsSnapshot(entries: [])
 
     /// Backwards-compatible convenience for the previous 7-day view.
     var lastSevenDays: [AnalyticsDay] { series(for: .week) }
@@ -87,34 +87,34 @@ struct AnalyticsSnapshot {
         )
     }
 
-    init(recordings: [Recording], calendar: Calendar = .current, now: Date = Date()) {
-        let completed = recordings.filter { recording in
-            recording.status == .completed && !recording.transcription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+    /// Built from the stats ledger rather than the recordings table, so the
+    /// numbers survive the user clearing their history.
+    init(entries: [StatsEntry], calendar: Calendar = .current, now: Date = Date()) {
+        let completed = entries
         let todayStart = calendar.startOfDay(for: now)
         let today = completed.filter { calendar.isDate($0.timestamp, inSameDayAs: now) }
 
         self.generatedAt = now
         self.totalRecordings = completed.count
         self.totalDuration = completed.reduce(0) { $0 + $1.duration }
-        self.totalWords = completed.reduce(0) { $0 + TextUtil.wordCount($1.transcription) }
+        self.totalWords = completed.reduce(0) { $0 + $1.words }
         self.estimatedTypingDuration = Self.estimatedTypingDuration(forWords: totalWords)
         self.estimatedTimeSaved = max(0, estimatedTypingDuration - totalDuration)
         self.todayRecordings = today.count
         self.todayDuration = today.reduce(0) { $0 + $1.duration }
-        self.todayWords = today.reduce(0) { $0 + TextUtil.wordCount($1.transcription) }
+        self.todayWords = today.reduce(0) { $0 + $1.words }
         self.todayEstimatedTimeSaved = max(0, Self.estimatedTypingDuration(forWords: todayWords) - todayDuration)
         self.averageWordsPerRecording = completed.isEmpty ? 0 : Double(totalWords) / Double(completed.count)
         self.averageWordsPerMinute = totalDuration > 0 ? Double(totalWords) / (totalDuration / 60) : 0
 
-        // Bucket completed recordings by start-of-day once, then walk the window.
+        // Bucket entries by start-of-day once, then walk the window.
         var wordsByDay: [Date: Int] = [:]
         var durationByDay: [Date: TimeInterval] = [:]
         var countByDay: [Date: Int] = [:]
-        for recording in completed {
-            let dayKey = calendar.startOfDay(for: recording.timestamp)
-            wordsByDay[dayKey, default: 0] += TextUtil.wordCount(recording.transcription)
-            durationByDay[dayKey, default: 0] += recording.duration
+        for entry in completed {
+            let dayKey = calendar.startOfDay(for: entry.timestamp)
+            wordsByDay[dayKey, default: 0] += entry.words
+            durationByDay[dayKey, default: 0] += entry.duration
             countByDay[dayKey, default: 0] += 1
         }
 

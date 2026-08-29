@@ -483,12 +483,26 @@ class SettingsViewModel: ObservableObject {
         refreshAnalytics()
     }
 
+    /// Clears the stats ledger. Recordings are untouched — this is the opposite
+    /// half of the split: deleting history keeps the statistics, and this
+    /// clears the statistics while keeping the history.
+    func resetStatistics() {
+        Task {
+            do {
+                try await RecordingStore.shared.resetStatistics()
+            } catch {
+                print("Failed to reset statistics: \(error)")
+            }
+            await MainActor.run { self.refreshAnalytics() }
+        }
+    }
+
     func refreshAnalytics() {
         isLoadingAnalytics = true
         Task {
             do {
-                let recordings = try await RecordingStore.shared.fetchAnalyticsRecordings()
-                let snapshot = AnalyticsSnapshot(recordings: recordings)
+                let entries = try await RecordingStore.shared.fetchStatsEntries()
+                let snapshot = AnalyticsSnapshot(entries: entries)
                 await MainActor.run {
                     self.analyticsSnapshot = snapshot
                     self.isLoadingAnalytics = false
@@ -864,6 +878,7 @@ struct SettingsView: View {
     @State private var isRecordingNewShortcut = false
     @State private var selectedTab = 0
     @State private var previousModelURL: URL?
+    @State private var isConfirmingStatsReset = false
     private let automaticMicrophoneID = "__automatic__"
     
     private struct SettingsTabInfo: Identifiable {
@@ -1087,6 +1102,31 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .disabled(viewModel.isLoadingAnalytics)
                     .help("Refresh analytics")
+
+                    // Statistics outlive the recordings they came from, so
+                    // clearing them has to be its own action rather than a side
+                    // effect of deleting history.
+                    Button(role: .destructive) {
+                        isConfirmingStatsReset = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(viewModel.isLoadingAnalytics)
+                    .help("Reset statistics")
+                }
+                .confirmationDialog(
+                    "Reset all statistics?",
+                    isPresented: $isConfirmingStatsReset,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset Statistics", role: .destructive) {
+                        viewModel.resetStatistics()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Totals and the activity graph go back to zero. Your recordings and transcripts are not affected.")
                 }
 
                 LazyVGrid(columns: [
@@ -1388,9 +1428,16 @@ struct SettingsView: View {
                 Picker("Structure", selection: $viewModel.s1DefaultStructure) {
                     ForEach(S1Structure.allCases) { Text($0.title).tag($0) }
                 }
+                Text(viewModel.s1DefaultStructure.detail)
+                    .font(.caption)
+                    .foregroundColor(palette.textTertiary)
+
                 Picker("Context", selection: $viewModel.s1DefaultContext) {
                     ForEach(S1Context.allCases) { Text($0.title).tag($0) }
                 }
+                Text(viewModel.s1DefaultContext.detail)
+                    .font(.caption)
+                    .foregroundColor(palette.textTertiary)
             }
 
             Text("S1-mini by Superwhisper — English only, and it normalizes rather than rewrites. Keep the API backend selected for modes that need a real prompt.")

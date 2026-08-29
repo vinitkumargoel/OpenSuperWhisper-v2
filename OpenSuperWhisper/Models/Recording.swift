@@ -197,7 +197,54 @@ class RecordingStore: ObservableObject {
             }
         }
 
+        // Statistics move out of the recordings table and into their own ledger,
+        // so that deleting history stops destroying them. Backfilled from what
+        // is currently on disk, which is the only chance to recover the history
+        // of recordings the user has already deleted — there isn't one.
+        migrator.registerMigration("v7_stats_ledger") { db in
+            try db.create(table: StatsEntry.databaseTableName, ifNotExists: true) { t in
+                t.column("recordingID", .text).primaryKey()
+                t.column("timestamp", .datetime).notNull()
+                t.column("duration", .double).notNull()
+                t.column("words", .integer).notNull()
+            }
+            try db.create(
+                index: "stats_ledger_on_timestamp",
+                on: StatsEntry.databaseTableName,
+                columns: ["timestamp"],
+                ifNotExists: true
+            )
+
+            let existing = try Recording
+                .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
+                .fetchAll(db)
+            for recording in existing {
+                try StatsEntry(recording: recording)?.insert(db)
+            }
+        }
+
         try migrator.migrate(dbQueue)
+    }
+
+    /// Mirrors a completed recording into the durable stats ledger.
+    ///
+    /// Runs inside the caller's transaction so a row and its statistics can
+    /// never diverge, and upserts so the repeated writes a single recording
+    /// receives — transcribe, then format, then a later reformat — settle on one
+    /// row rather than counting the recording several times.
+    fileprivate nonisolated static func recordStats(_ db: Database, for recording: Recording) throws {
+        guard let entry = StatsEntry(recording: recording) else { return }
+        try entry.upsert(db)
+    }
+
+    /// Same, for the update paths that only have an id and have just written the
+    /// row. Reads the row back so the ledger reflects what was actually stored.
+    fileprivate nonisolated static func recordStats(_ db: Database, forID id: UUID) throws {
+        guard let recording = try Recording
+            .filter(Recording.Columns.id == id)
+            .fetchOne(db)
+        else { return }
+        try recordStats(db, for: recording)
     }
     
     private nonisolated func fetchAllRecordings() async throws -> [Recording] {
@@ -236,49 +283,23 @@ class RecordingStore: ObservableObject {
         }
     }
 
-    nonisolated func fetchAnalyticsRecordings() async throws -> [Recording] {
-        let recordings = try await dbQueue.read { db in
-            try Recording
-                .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
-                .order(Recording.Columns.timestamp.desc)
+    /// Statistics come from the ledger, not from the recordings table, so they
+    /// survive clearing history. Only the last `maxTrackedDays` matter to the
+    /// UI, but lifetime totals need everything, so this returns the lot.
+    nonisolated func fetchStatsEntries() async throws -> [StatsEntry] {
+        try await dbQueue.read { db in
+            try StatsEntry
+                .order(StatsEntry.Columns.timestamp.desc)
                 .fetchAll(db)
         }
-        return await repairDurationsForAnalytics(recordings)
     }
 
-    private nonisolated func repairDurationsForAnalytics(_ recordings: [Recording]) async -> [Recording] {
-        await withTaskGroup(of: Recording.self) { group in
-            for recording in recordings {
-                group.addTask {
-                    guard recording.duration <= 0 else { return recording }
-                    let asset = AVURLAsset(url: recording.url)
-                    let loadedDuration = (try? await asset.load(.duration))
-                        .map { CMTimeGetSeconds($0) } ?? 0
-                    let duration = loadedDuration.isFinite && loadedDuration > 0 ? loadedDuration : 0
-
-                    guard duration > 0 else { return recording }
-                    return Recording(
-                        id: recording.id,
-                        timestamp: recording.timestamp,
-                        fileName: recording.fileName,
-                        transcription: recording.transcription,
-                        rawTranscription: recording.rawTranscription,
-                        duration: duration,
-                        status: recording.status,
-                        progress: recording.progress,
-                        sourceFileURL: recording.sourceFileURL,
-                        targetAppName: recording.targetAppName,
-                        targetAppBundleID: recording.targetAppBundleID,
-                        isStarred: recording.isStarred
-                    )
-                }
-            }
-
-            var repaired: [Recording] = []
-            for await recording in group {
-                repaired.append(recording)
-            }
-            return repaired.sorted { $0.timestamp > $1.timestamp }
+    /// Clears statistics deliberately. Separate from deleting recordings on
+    /// purpose: "I want the disk space back" and "I want my totals reset" are
+    /// different intentions and used to be the same button.
+    nonisolated func resetStatistics() async throws {
+        _ = try await dbQueue.write { db in
+            try StatsEntry.deleteAll(db)
         }
     }
 
@@ -329,6 +350,11 @@ class RecordingStore: ObservableObject {
                 try Recording
                     .filter(Recording.Columns.id == id)
                     .updateAll(db, [Recording.Columns.duration.set(to: duration)])
+                // The ledger was written when the recording completed, which for
+                // these rows was before the duration was known. Without this it
+                // keeps the zero for good, understating recorded time and
+                // inflating words-per-minute.
+                try Self.recordStats(db, forID: id)
             }
         }
 
@@ -496,9 +522,13 @@ class RecordingStore: ObservableObject {
                 if let resolvedError {
                     assignments.append(Recording.Columns.errorMessage.set(to: resolvedError))
                 }
-                return try Recording
+                let changed = try Recording
                     .filter(Recording.Columns.id == id)
                     .updateAll(db, assignments)
+                if status == .completed {
+                    try Self.recordStats(db, forID: id)
+                }
+                return changed
             }
             if let index = recordings.firstIndex(where: { $0.id == id }) {
                 var updated = recordings[index]
@@ -593,6 +623,7 @@ class RecordingStore: ObservableObject {
     private nonisolated func updateRecordingInDB(_ recording: Recording) async throws {
         try await dbQueue.write { db in
             try recording.update(db)
+            try Self.recordStats(db, for: recording)
         }
     }
 
