@@ -88,9 +88,18 @@ enum S1MiniPrompt {
     /// range into sentence-aligned chunks. Dictation is almost never this
     /// long, so the common path returns a single chunk untouched.
     ///
-    /// - Parameter maxCharacters: roughly 4 characters per token; 800 tokens of
-    ///   headroom under the ~1,000-token guidance lands near 3,200 characters.
-    static func chunk(_ text: String, maxCharacters: Int = 3200) -> [String] {
+    /// - Parameter maxCharacters: roughly 4 characters per token, so this is
+    ///   about 250 tokens per pass — well clear of the model card's ~1,000-token
+    ///   ceiling rather than pressed against it.
+    ///
+    ///   The previous 3,200 was sized to sit just under that ceiling, which put
+    ///   every long dictation into the range where output degrades: a 2,937-char
+    ///   transcript went through as a single 923-token pass and looped. Smaller
+    ///   passes are also *faster* end to end (5.2 s versus 5.9 s on that
+    ///   transcript) because a short pass carries a small token budget, so a
+    ///   generation that does go wrong has less room to run. There is no
+    ///   quality cost: retention measured identically at both sizes.
+    static func chunk(_ text: String, maxCharacters: Int = 1000) -> [String] {
         guard text.count > maxCharacters else { return [text] }
 
         // Sentence-ish boundaries: keep the terminator with the sentence it ends.

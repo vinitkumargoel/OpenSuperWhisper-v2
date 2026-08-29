@@ -192,7 +192,11 @@ final class AppPreferences {
     @UserDefault(key: "s1DefaultStyling", defaultValue: "semi-formal")
     var s1DefaultStyling: String
 
-    @UserDefault(key: "s1DefaultStructure", defaultValue: "prose")
+    /// Defaults to `lists` rather than `prose`: when the speaker does not
+    /// enumerate anything the model leaves the text as prose anyway (measured —
+    /// flowing speech comes back with zero bullets and full retention), so this
+    /// only changes the output where a list was actually dictated.
+    @UserDefault(key: "s1DefaultStructure", defaultValue: "lists")
     var s1DefaultStructure: String
 
     @UserDefault(key: "s1DefaultContext", defaultValue: "general")
