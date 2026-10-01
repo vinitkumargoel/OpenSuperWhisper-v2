@@ -526,7 +526,7 @@ class SettingsViewModel: ObservableObject {
     }
     
     func isFluidAudioModelDownloaded(version: String) -> Bool {
-        let asrVersion: AsrModelVersion = version == "v2" ? .v2 : .v3
+        let asrVersion = AsrModelVersion(appVersion: version)
         
         // Используем правильный путь к кэшу согласно документации:
         // ~/Library/Application Support/FluidAudio/Models/<version-folder>/
@@ -670,7 +670,7 @@ class SettingsViewModel: ObservableObject {
         
         downloadTask = Task {
             do {
-                let version: AsrModelVersion = model.version == "v2" ? .v2 : .v3
+                let version = AsrModelVersion(appVersion: model.version)
                 
                 guard !Task.isCancelled else {
                     await MainActor.run {
@@ -2529,16 +2529,22 @@ struct SettingsFluidAudioModel: Identifiable {
 struct SettingsFluidAudioModels {
     static let availableModels = [
         SettingsFluidAudioModel(
+            name: "Parakeet v2",
+            version: "v2",
+            isDownloaded: false,
+            description: "Recommended for English: most accurate, ~80 ms per dictation"
+        ),
+        SettingsFluidAudioModel(
+            name: "Parakeet Ultra",
+            version: "ultra",
+            isDownloaded: false,
+            description: "Multilingual, 25 languages, best on long recordings"
+        ),
+        SettingsFluidAudioModel(
             name: "Parakeet v3",
             version: "v3",
             isDownloaded: false,
             description: "Multilingual, 25 languages"
-        ),
-        SettingsFluidAudioModel(
-            name: "Parakeet v2",
-            version: "v2",
-            isDownloaded: false,
-            description: "English-only, higher recall"
         )
     ]
 }
@@ -2569,16 +2575,22 @@ struct OnboardingUnifiedModels {
             )
         ),
         OnboardingUnifiedModel(
-            name: "Parakeet v3",
-            isDownloaded: false,
-            description: "Fastest processing and accurate",
-            type: .parakeet(version: "v3")
-        ),
-        OnboardingUnifiedModel(
             name: "Parakeet v2",
             isDownloaded: false,
-            description: "Fastest processing and English-only, higher recall",
+            description: "Recommended for English: fastest and most accurate",
             type: .parakeet(version: "v2")
+        ),
+        OnboardingUnifiedModel(
+            name: "Parakeet Ultra",
+            isDownloaded: false,
+            description: "Fast and accurate, 25 languages",
+            type: .parakeet(version: "ultra")
+        ),
+        OnboardingUnifiedModel(
+            name: "Parakeet v3",
+            isDownloaded: false,
+            description: "Fast, 25 languages",
+            type: .parakeet(version: "v3")
         ),
         OnboardingUnifiedModel(
             name: "Whisper Medium",

@@ -127,7 +127,11 @@ class WhisperEngine: TranscriptionEngine {
         var params = WhisperFullParams()
         params.strategy = settings.useBeamSearch ? .beamSearch : .greedy
         params.nThreads = Int32(nThreads)
-        params.noTimestamps = !settings.showTimestamps
+        // Always decode with timestamp tokens: whisper.cpp uses them to seek
+        // between 30 s windows, and without them it silently drops speech on
+        // long audio (long-form WER 14.8% -> 2.0% on an M3 benchmark). Whether
+        // timestamps are *shown* is decided below when building the text.
+        params.noTimestamps = false
         params.suppressBlank = settings.suppressBlankAudio
         params.translate = settings.translateToEnglish
         let isAutoDetect = settings.selectedLanguage == "auto"

@@ -18,9 +18,8 @@ class FluidAudioEngine: TranscriptionEngine {
     }
     
     func initialize() async throws {
-        let versionString = AppPreferences.shared.fluidAudioModelVersion
-        let version: AsrModelVersion = versionString == "v2" ? .v2 : .v3
-        
+        let version = AsrModelVersion(appVersion: AppPreferences.shared.fluidAudioModelVersion)
+
         let models = try await AsrModels.downloadAndLoad(version: version)
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
@@ -114,11 +113,22 @@ class FluidAudioEngine: TranscriptionEngine {
     }
     
     func getSupportedLanguages() -> [String] {
-        let versionString = AppPreferences.shared.fluidAudioModelVersion
-        if versionString == "v2" {
+        if AsrModelVersion(appVersion: AppPreferences.shared.fluidAudioModelVersion) == .v2 {
             return ["en"]
         }
         return ["en", "de", "es", "fr", "it", "pt", "ru", "pl", "nl", "tr", "cs", "ar", "zh", "ja", "hu", "fi", "hr", "sk", "sr", "sl", "uk", "ca", "da", "el", "bg"]
     }
 }
 
+
+extension AsrModelVersion {
+    /// Maps the version string stored in preferences ("v2", "v3", "ultra")
+    /// to FluidAudio's model version. Unknown values fall back to v3.
+    init(appVersion: String) {
+        switch appVersion {
+        case "v2": self = .v2
+        case "ultra": self = .ultra
+        default: self = .v3
+        }
+    }
+}

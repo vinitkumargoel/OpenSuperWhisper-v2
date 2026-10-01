@@ -68,7 +68,7 @@ final class AppPreferences {
     @OptionalUserDefault(key: "selectedWhisperModelPath")
     var selectedWhisperModelPath: String?
     
-    @UserDefault(key: "fluidAudioModelVersion", defaultValue: "v3")
+    @UserDefault(key: "fluidAudioModelVersion", defaultValue: "v2")
     var fluidAudioModelVersion: String
     
     @UserDefault(key: "whisperLanguage", defaultValue: "en")
