@@ -18,32 +18,39 @@ struct OpenSuperWhisperApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if !appState.hasCompletedOnboarding {
-                    OnboardingView()
-                        .frame(width: 450)
-                } else {
-                    ContentView()
-                        .frame(minWidth: 860, idealWidth: 980, maxWidth: 1300)
-                }
-            }
-            .frame(minHeight: 480, maxHeight: 1000)
-            .environmentObject(appState)
-            .themedWindow()
+            RootView()
+                .environmentObject(appState)
+                .daylight()
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 980, height: 660)
+        .defaultSize(width: 1100, height: 740)
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("Import Audio Files…") {
+                    (NSApp.delegate as? AppDelegate)?.importAudioFiles()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
-                    if let delegate = NSApplication.shared.delegate as? AppDelegate {
-                        delegate.showMainWindow()
-                    }
-                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                    AppRouter.shared.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
+            }
+            CommandGroup(before: .toolbar) {
+                Button("Home") { AppRouter.shared.show(.home) }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("Library") { AppRouter.shared.show(.library) }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button("Insights") { AppRouter.shared.show(.insights) }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button("Search Transcripts") {
+                    AppRouter.shared.show(.library)
+                    AppRouter.shared.focusSearchRequest += 1
+                }
+                .keyboardShortcut("k", modifiers: .command)
+                Divider()
             }
         }
         .handlesExternalEvents(matching: Set(arrayLiteral: "openMainWindow"))
@@ -85,15 +92,13 @@ class AppState: ObservableObject {
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var statusItem: NSStatusItem?
     private var mainWindow: NSWindow?
-    private var languageSubmenu: NSMenu?
-    private var microphoneService = MicrophoneService.shared
-    private var microphoneObserver: AnyCancellable?
+    private var statusPopover: NSPopover?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
 
         // Before any window is shown, so the title bar doesn't flash the wrong
         // appearance on launch.
-        ThemeManager.shared.start()
+        AppearanceManager.shared.start()
 
         setupStatusBarItem()
         
@@ -101,12 +106,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self.mainWindow = window
             window.delegate = self
             
-            window.minSize = NSSize(width: 860, height: 480)
-            window.maxSize = NSSize(width: 1300, height: 1100)
+            window.isMovableByWindowBackground = true
+            window.minSize = NSSize(width: 900, height: 600)
+            window.maxSize = NSSize(width: 1600, height: 1200)
         }
         
         OpenSuperWhisperApp.startTranscriptionQueue()
-        observeMicrophoneChanges()
 
         if ProcessInfo.processInfo.environment["OSW_S1_SELFTEST"] != nil {
             runS1SelfTest()
@@ -210,16 +215,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return UTType(filenameExtension: url.pathExtension)?.conforms(to: .audio) ?? false
     }
     
-    private func observeMicrophoneChanges() {
-        microphoneObserver = microphoneService.$availableMicrophones
-            .sink { [weak self] _ in
-                self?.updateStatusBarMenu()
-            }
-    }
-    
+    // MARK: - Menu bar
+
+    /// The status item opens a Daylight panel (record, last transcript, quick
+    /// switches, language and microphone pickers) instead of a plain menu.
     private func setupStatusBarItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        
+
         if let button = statusItem?.button {
             if let iconImage = NSImage(named: "tray_icon") {
                 iconImage.size = NSSize(width: 48, height: 48)
@@ -228,154 +230,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             } else {
                 button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "OpenSuperWhisper")
             }
-            
             button.action = #selector(statusBarButtonClicked(_:))
             button.target = self
         }
-        
-        updateStatusBarMenu()
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        let host = NSHostingController(rootView: StatusPanelView().daylight())
+        // Let the popover grow when a picker list in the panel expands.
+        host.sizingOptions = .preferredContentSize
+        popover.contentViewController = host
+        statusPopover = popover
     }
-    
-    private func updateStatusBarMenu() {
-        let menu = NSMenu()
-        
-        menu.addItem(NSMenuItem(title: "OpenSuperWhisper", action: #selector(openApp), keyEquivalent: "o"))
-        
-        let transcriptionLanguageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
-        languageSubmenu = NSMenu()
-        
-        // Add language options
-        for languageCode in LanguageUtil.availableLanguages {
-            let languageName = LanguageUtil.languageNames[languageCode] ?? languageCode
-            let languageItem = NSMenuItem(title: languageName, action: #selector(selectLanguage(_:)), keyEquivalent: "")
-            languageItem.target = self
-            languageItem.representedObject = languageCode
-            languageItem.state = (AppPreferences.shared.whisperLanguage == languageCode) ? .on : .off
-            languageSubmenu?.addItem(languageItem)
-        }
-        
-        transcriptionLanguageItem.submenu = languageSubmenu
-        menu.addItem(transcriptionLanguageItem)
-        
-        // Listen for language preference changes
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(languagePreferenceChanged),
-            name: .appPreferencesLanguageChanged,
-            object: nil
-        )
-        
-        menu.addItem(NSMenuItem.separator())
-        
-        let microphoneMenu = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        
-        let microphones = microphoneService.availableMicrophones
-        let currentMic = microphoneService.currentMicrophone
-        
-        if microphones.isEmpty {
-            let noDeviceItem = NSMenuItem(title: "No microphones available", action: nil, keyEquivalent: "")
-            noDeviceItem.isEnabled = false
-            submenu.addItem(noDeviceItem)
-        } else {
-            let builtInMicrophones = microphones.filter { $0.isBuiltIn }
-            let externalMicrophones = microphones.filter { !$0.isBuiltIn }
-            
-            for microphone in builtInMicrophones {
-                let item = NSMenuItem(
-                    title: microphone.displayName,
-                    action: #selector(selectMicrophone(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = microphone
-                
-                if let current = currentMic, current.id == microphone.id {
-                    item.state = .on
-                }
-                
-                submenu.addItem(item)
-            }
-            
-            if !builtInMicrophones.isEmpty && !externalMicrophones.isEmpty {
-                submenu.addItem(NSMenuItem.separator())
-            }
-            
-            for microphone in externalMicrophones {
-                let item = NSMenuItem(
-                    title: microphone.displayName,
-                    action: #selector(selectMicrophone(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = microphone
-                
-                if let current = currentMic, current.id == microphone.id {
-                    item.state = .on
-                }
-                
-                submenu.addItem(item)
-            }
-        }
-        
-        microphoneMenu.submenu = submenu
-        menu.addItem(microphoneMenu)
-        
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
-        
-        statusItem?.menu = menu
-    }
-    
-    @objc private func selectMicrophone(_ sender: NSMenuItem) {
-        guard let device = sender.representedObject as? MicrophoneService.AudioDevice else { return }
-        microphoneService.selectMicrophone(device)
-        updateStatusBarMenu()
-    }
-    
+
     @objc private func statusBarButtonClicked(_ sender: Any) {
-        statusItem?.button?.performClick(nil)
-    }
-    
-    @objc private func openApp() {
-        showMainWindow()
-    }
-    
-    @objc private func quitApp() {
-        NSApplication.shared.terminate(nil)
-    }
-    
-    @objc private func selectLanguage(_ sender: NSMenuItem) {
-        guard let languageCode = sender.representedObject as? String else { return }
-        
-        // Update preferences
-        AppPreferences.shared.whisperLanguage = languageCode
-        
-        // Update menu item states
-        if let submenu = sender.menu {
-            for item in submenu.items {
-                item.state = .off
-            }
-            sender.state = .on
+        guard let button = statusItem?.button, let popover = statusPopover else { return }
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
     }
-    
-    @objc private func languagePreferenceChanged() {
-        updateLanguageMenuSelection()
+
+    func closeStatusPanel() {
+        statusPopover?.performClose(nil)
     }
-    
-    private func updateLanguageMenuSelection() {
-        guard let languageSubmenu = languageSubmenu else { return }
-        
-        let currentLanguage = AppPreferences.shared.whisperLanguage
-        
-        for item in languageSubmenu.items {
-            if let languageCode = item.representedObject as? String {
-                item.state = (languageCode == currentLanguage) ? .on : .off
-            }
+
+    /// File › Import Audio Files…: queue any audio files the user picks.
+    func importAudioFiles() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.title = "Import Audio Files"
+        panel.prompt = "Transcribe"
+        if panel.runModal() == .OK {
+            queueAudioURLs(panel.urls)
         }
     }
-    
+
     func showMainWindow() {
         NSApplication.shared.setActivationPolicy(.regular)
         
@@ -394,11 +289,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 extension AppDelegate: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        NSApplication.shared.setActivationPolicy(.accessory)
-    }
-    
-    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        let width = min(max(frameSize.width, 860), 1300)
-        return NSSize(width: width, height: frameSize.height)
+        // Stay a regular app while Settings is still open.
+        if !SettingsWindowController.shared.isVisible {
+            NSApplication.shared.setActivationPolicy(.accessory)
+        }
     }
 }

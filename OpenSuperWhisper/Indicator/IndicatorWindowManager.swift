@@ -139,7 +139,7 @@ class IndicatorWindowManager: IndicatorViewDelegate {
             window.setFrameOrigin(NSPoint(x: x, y: y))
 
             // Set content view
-            let hostingView = NSHostingView(rootView: IndicatorWindow(viewModel: newViewModel).themedWindow())
+            let hostingView = NSHostingView(rootView: IndicatorWindow(viewModel: newViewModel).daylight())
             window.contentView = hostingView
         }
 

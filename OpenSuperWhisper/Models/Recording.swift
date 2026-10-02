@@ -223,6 +223,18 @@ class RecordingStore: ObservableObject {
             }
         }
 
+        // Dictations are inserted already completed, and the insert path did not
+        // mirror them into the ledger, so every dictation since v7 went uncounted.
+        // Upsert keeps rows the ledger already has.
+        migrator.registerMigration("v8_backfill_stats_ledger") { db in
+            let completed = try Recording
+                .filter(Recording.Columns.status == RecordingStatus.completed.rawValue)
+                .fetchAll(db)
+            for recording in completed {
+                try Self.recordStats(db, for: recording)
+            }
+        }
+
         try migrator.migrate(dbQueue)
     }
 
@@ -271,15 +283,37 @@ class RecordingStore: ObservableObject {
     }
 
     nonisolated func fetchRecordings(limit: Int, offset: Int, starredOnly: Bool = false) async throws -> [Recording] {
+        try await fetchRecordings(limit: limit, offset: offset, filter: starredOnly ? .starred : .all)
+    }
+
+    nonisolated func fetchRecordings(limit: Int, offset: Int, filter: RecordingFilter) async throws -> [Recording] {
         try await dbQueue.read { db in
-            var request = Recording.all()
-            if starredOnly {
-                request = request.filter(Recording.Columns.isStarred == true)
-            }
-            return try request
+            try filter.apply(to: Recording.all())
                 .order(Recording.Columns.timestamp.desc)
                 .limit(limit, offset: offset)
                 .fetchAll(db)
+        }
+    }
+
+    /// True totals for the library's filter chips, counted in the database
+    /// rather than from whatever page happens to be loaded.
+    nonisolated func fetchLibraryCounts() async -> LibraryCounts {
+        do {
+            return try await dbQueue.read { db in
+                let all = try Recording.fetchCount(db)
+                let recent = try RecordingFilter.recent.apply(to: Recording.all()).fetchCount(db)
+                let starred = try RecordingFilter.starred.apply(to: Recording.all()).fetchCount(db)
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT targetAppName AS app, COUNT(*) AS n FROM \(Recording.databaseTableName)
+                    WHERE targetAppName IS NOT NULL AND targetAppName != ''
+                    GROUP BY targetAppName ORDER BY n DESC, targetAppName ASC
+                    """)
+                let apps: [(name: String, count: Int)] = rows.map { row in (name: row["app"] as String, count: row["n"] as Int) }
+                return LibraryCounts(all: all, recent: recent, starred: starred, apps: apps)
+            }
+        } catch {
+            print("Failed to count recordings: \(error)")
+            return .empty
         }
     }
 
@@ -467,6 +501,7 @@ class RecordingStore: ObservableObject {
     private nonisolated func insertRecording(_ recording: Recording) async throws {
         try await dbQueue.write { db in
             try recording.insert(db)
+            try Self.recordStats(db, for: recording)
         }
     }
     
@@ -651,14 +686,25 @@ class RecordingStore: ObservableObject {
         }
     }
 
-    func deleteAllRecordings() {
+    /// Deletes every recording and its audio. With `keepStarred`, starred
+    /// recordings survive. Statistics live in their own ledger and are kept.
+    func deleteAllRecordings(keepStarred: Bool = false) {
         Task {
             do {
                 let allRecordings = try await fetchAllRecordings()
-                for recording in allRecordings {
+                let doomed = keepStarred ? allRecordings.filter { !$0.isStarred } : allRecordings
+                for recording in doomed {
+                    if recording.isPending { TranscriptionQueue.shared.cancelRecording(recording.id) }
                     try? FileManager.default.removeItem(at: recording.url)
                 }
-                try await deleteAllRecordingsFromDB()
+                if keepStarred {
+                    let ids = doomed.map(\.id)
+                    _ = try await dbQueue.write { db -> Int in
+                        try Recording.filter(ids.contains(Recording.Columns.id)).deleteAll(db)
+                    }
+                } else {
+                    try await deleteAllRecordingsFromDB()
+                }
                 await MainActor.run {
                     NotificationCenter.default.post(name: Self.recordingsDidUpdateNotification, object: nil)
                 }
@@ -667,7 +713,7 @@ class RecordingStore: ObservableObject {
             }
         }
     }
-    
+
     private nonisolated func deleteAllRecordingsFromDB() async throws {
         try await dbQueue.write { db in
             _ = try Recording.deleteAll(db)
@@ -690,17 +736,19 @@ class RecordingStore: ObservableObject {
     }
     
     nonisolated func searchRecordingsAsync(query: String, limit: Int = 100, offset: Int = 0, starredOnly: Bool = false) async -> [Recording] {
+        await searchRecordingsAsync(query: query, limit: limit, offset: offset, filter: starredOnly ? .starred : .all)
+    }
+
+    nonisolated func searchRecordingsAsync(query: String, limit: Int = 100, offset: Int = 0, filter: RecordingFilter) async -> [Recording] {
         do {
             return try await dbQueue.read { db in
-                // Match either the transcription or the target-app name.
-                var request = Recording.filter(
+                // Match the transcript, the raw transcript, or the target-app name.
+                let request = Recording.filter(
                     Recording.Columns.transcription.like("%\(query)%").collating(.nocase)
+                    || Recording.Columns.rawTranscription.like("%\(query)%").collating(.nocase)
                     || Recording.Columns.targetAppName.like("%\(query)%").collating(.nocase)
                 )
-                if starredOnly {
-                    request = request.filter(Recording.Columns.isStarred == true)
-                }
-                return try request
+                return try filter.apply(to: request)
                     .order(Recording.Columns.timestamp.desc)
                     .limit(limit, offset: offset)
                     .fetchAll(db)
@@ -762,6 +810,62 @@ class RecordingStore: ObservableObject {
         } catch {
             print("Failed to purge old recordings: \(error)")
             return 0
+        }
+    }
+}
+
+
+// MARK: - Library filtering
+
+/// Which slice of the library a list shows. Applied in SQL so counts and
+/// paging are exact.
+enum RecordingFilter: Hashable {
+    case all
+    /// The last 48 hours.
+    case recent
+    case starred
+    case app(String)
+
+    static let recentWindow: TimeInterval = 2 * 24 * 3600
+
+    func apply(to request: QueryInterfaceRequest<Recording>) -> QueryInterfaceRequest<Recording> {
+        switch self {
+        case .all:
+            return request
+        case .recent:
+            return request.filter(Recording.Columns.timestamp > Date().addingTimeInterval(-Self.recentWindow))
+        case .starred:
+            return request.filter(Recording.Columns.isStarred == true)
+        case .app(let name):
+            return request.filter(Recording.Columns.targetAppName == name)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .recent: return "Recent"
+        case .starred: return "Starred"
+        case .app(let name): return name
+        }
+    }
+}
+
+struct LibraryCounts {
+    var all: Int
+    var recent: Int
+    var starred: Int
+    /// Apps with at least one recording, most used first.
+    var apps: [(name: String, count: Int)]
+
+    static let empty = LibraryCounts(all: 0, recent: 0, starred: 0, apps: [])
+
+    func count(for filter: RecordingFilter) -> Int {
+        switch filter {
+        case .all: return all
+        case .recent: return recent
+        case .starred: return starred
+        case .app(let name): return apps.first { $0.name == name }?.count ?? 0
         }
     }
 }

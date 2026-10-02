@@ -304,6 +304,19 @@ class AudioRecorder: NSObject, ObservableObject {
         }
     }
     
+    /// Position and length of the clip being played, for the scrubber. Nil when
+    /// nothing is playing.
+    var playbackPosition: (current: TimeInterval, duration: TimeInterval)? {
+        guard let player = audioPlayer else { return nil }
+        return (player.currentTime, player.duration)
+    }
+
+    /// Jumps playback to `fraction` (0…1) of the clip.
+    func seekPlayback(toFraction fraction: Double) {
+        guard let player = audioPlayer else { return }
+        player.currentTime = max(0, min(1, fraction)) * player.duration
+    }
+
     func stopPlaying() {
         audioPlayer?.stop()
         audioPlayer = nil

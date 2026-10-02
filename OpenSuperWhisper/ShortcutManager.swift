@@ -96,6 +96,27 @@ class ShortcutManager {
         }
     }
     
+    /// Starts or stops dictation from a button (the menu-bar panel), sharing the
+    /// hotkey's session so the two can never run overlapping recordings.
+    @MainActor
+    func toggleRecordingFromUI() {
+        if activeVm != nil {
+            IndicatorWindowManager.shared.stopRecording()
+            activeVm = nil
+            holdMode = false
+            return
+        }
+        let indicatorPoint: NSPoint?
+        if let caret = FocusUtils.getCaretRect() {
+            indicatorPoint = FocusUtils.convertAXPointToCocoa(caret.origin)
+        } else {
+            indicatorPoint = FocusUtils.getCurrentCursorPosition()
+        }
+        let vm = IndicatorWindowManager.shared.show(nearPoint: indicatorPoint)
+        vm.startRecording()
+        activeVm = vm
+    }
+
     private func handleKeyDown() {
         holdWorkItem?.cancel()
         holdMode = false
