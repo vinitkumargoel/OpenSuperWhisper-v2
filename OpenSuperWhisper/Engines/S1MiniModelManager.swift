@@ -26,7 +26,9 @@ final class S1MiniModelManager: ObservableObject {
         static let eightBit = Variant(
             id: "8bit",
             repo: "mlx-community/S1-mini-MLX-8bit",
-            title: "8-bit (higher fidelity)",
+            // Measured no better than 4-bit on the formatter benchmark
+            // (85.1% vs 86.6% pass) while 30% slower and using 0.3 GB more.
+            title: "8-bit (larger, no measured gain)",
             approximateBytes: 645_000_000
         )
 
